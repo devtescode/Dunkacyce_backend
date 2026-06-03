@@ -1,5 +1,6 @@
 const Food = require("../Models/models/food.model");
 const Cart = require("../Models/models/cart.model");
+const axios = require("axios");
 
 module.exports.addToCart = async (req, res) => {
   try {
@@ -145,3 +146,34 @@ module.exports.removeFromCart = async (req, res) => {
     });
   }
 };
+
+module.exports.initializePayment = async (req, res) => {
+  try {
+    const { email, amount } = req.body;
+
+    const response = await axios.post(
+      "https://api.paystack.co/transaction/initialize",
+      {
+        email,
+        amount: amount * 100,
+        callback_url: "http://localhost:8080/orders",
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.API_SECRET}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    res.status(200).json(response.data.data);
+  } catch (error) {
+    console.log(error.response?.data || error.message);
+
+    res.status(500).json({
+      success: false,
+      message: "Payment initialization failed",
+    });
+  }
+
+}

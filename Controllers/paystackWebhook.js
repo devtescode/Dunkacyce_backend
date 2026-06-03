@@ -37,7 +37,7 @@ router.post('/webhook', async (req, res) => {
             const authorization_code = authorization?.authorization_code || 'N/A';
 
             const username = metadata?.username;
-            const dummyEmail = `${username}@opay.com`;
+            const customerEmail = metadata?.customerEmail;
 
             if (!amount || !username) {
                 console.error('Amount or username is missing in webhook data');
@@ -48,7 +48,7 @@ router.post('/webhook', async (req, res) => {
 
             const payment = new PaymentDB({
                 event: event.event,
-                customerEmail: dummyEmail,
+                customerEmail: customerEmail || 'unknown',
                 amount: amountInFullCurrency,
                 currency: currency || 'NGN',
                 reference: reference || 'No Reference',

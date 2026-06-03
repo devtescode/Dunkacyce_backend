@@ -8,7 +8,7 @@ const adminRoutes = require('./Routes/user.adminRoutes');
 const foodRoutes = require('./Routes/food.routes');
 const cartRoutes = require('./Routes/cart.routes');
 // const Payment = require('./Routes/payments')
-// const paystackroute = require('./Controllers/paystackWebhook');
+const paystackroute = require('./Controllers/paystackWebhook');
 
 // const cloudinary = require("./config/cloudinary"); 
 
@@ -40,7 +40,15 @@ mongoose
 app.use('/admin', adminRoutes);
 app.use('/dunnkayce', userRoutes);
 
-
+app.use('/api/paystack', 
+  express.raw({ type: '*/*' }),  
+  (req, res, next) => {
+      req.rawBody = req.body;  
+      console.log('Captured Raw Body:', req.rawBody.toString('utf8')); 
+      next(); 
+  },
+  paystackroute
+);
 
 app.get('/', (req, res) => {
     res.status(200).json({ message: 'Welcome to Dunnkayce Backend'});
