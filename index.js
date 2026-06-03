@@ -6,6 +6,7 @@ const cors = require('cors');
 const userRoutes = require('./Routes/user.routes');
 const adminRoutes = require('./Routes/user.adminRoutes');
 const foodRoutes = require('./Routes/food.routes');
+const cartRoutes = require('./Routes/cart.routes');
 // const Payment = require('./Routes/payments')
 // const paystackroute = require('./Controllers/paystackWebhook');
 
@@ -23,6 +24,7 @@ app.use(cors());
 app.use(express.urlencoded({ extended: true, limit: '200mb' }));
 app.use(express.json({ limit: '200mb' }));
 app.use('/food', foodRoutes);
+app.use('/cart', cartRoutes);
 
 mongoose
     .connect(URI)
@@ -37,6 +39,7 @@ mongoose
 // app.use('/admin', userRoutes);
 app.use('/admin', adminRoutes);
 app.use('/dunnkayce', userRoutes);
+
 
 
 app.get('/', (req, res) => {
