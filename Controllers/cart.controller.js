@@ -156,7 +156,7 @@ module.exports.initializePayment = async (req, res) => {
       {
         email,
         amount: amount * 100,
-        callback_url: "https://dunkacyce-backend.onrender.com/orders",
+        callback_url: "https://dunnkayce-navy.vercel.app/orders",
       },
       {
         headers: {
