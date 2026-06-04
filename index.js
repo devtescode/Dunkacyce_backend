@@ -25,6 +25,7 @@ app.use(express.urlencoded({ extended: true, limit: '200mb' }));
 app.use(express.json({ limit: '200mb' }));
 app.use('/food', foodRoutes);
 app.use('/cart', cartRoutes);
+app.use('/orders', require('./Routes/order.routes'));
 
 mongoose
     .connect(URI)

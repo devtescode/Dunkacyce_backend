@@ -11,14 +11,38 @@ const orderItemSchema = new mongoose.Schema({
 const orderSchema = new mongoose.Schema(
   {
     userId: { type: String, required: true },
+
     items: [orderItemSchema],
+
     hostel: { type: String, required: true },
     room: { type: String, required: true },
-    paymentMethod: { type: String, enum: ["Paystack", "Moniepoint"], required: true },
-    paymentStatus: { type: String, enum: ["Pending", "Paid", "Rejected"], default: "Pending" },
-    status: { type: String, enum: ["Pending", "Preparing", "Ready", "Delivered"], default: "Pending" },
+
+    paymentMethod: {
+      type: String,
+      enum: ["Paystack", "Moniepoint"],
+      required: true,
+    },
+
+    paymentStatus: {
+      type: String,
+      enum: ["Pending", "Paid", "Rejected"],
+      default: "Pending",
+    },
+
+    status: {
+      type: String,
+      enum: ["Pending", "Preparing", "Ready", "Delivered"],
+      default: "Pending",
+    },
+
     deliveryFee: { type: Number, default: 100 },
+
     total: { type: Number, required: true },
+
+    // 🔥 ADD THIS (CRITICAL FOR PAYSTACK)
+    reference: { type: String, unique: true, required: true },
+
+    paidAt: { type: Date },
   },
   { timestamps: true }
 );
