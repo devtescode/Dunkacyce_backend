@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const router = express.Router();
 const { PaymentDB } = require('../Models/webhookModel');
 const { log } = require('console');
-const { Userschema } = require('../Models/user.models');
+const User = require('../Models/user.models');
 require('dotenv').config();
 
 const PAYSTACK_SECRET = process.env.API_SECRET;
@@ -37,18 +37,18 @@ router.post('/webhook', async (req, res) => {
             const authorization_code = authorization?.authorization_code || 'N/A';
 
             const username = metadata?.username;
-            const customerEmail = metadata?.customerEmail;
+            const customerEmail = metadata?.customerEmail || metadata?.email;
 
-            if (!amount || !username) {
-                console.error('Amount or username is missing in webhook data');
-                return res.status(400).json({ error: 'Missing amount or username' });
+            if (!amount || !customerEmail) {
+                console.error('Amount or customerEmail is missing in webhook data');
+                return res.status(400).json({ error: 'Missing amount or customerEmail' });
             }
 
             const amountInFullCurrency = amount / 100;
 
             const payment = new PaymentDB({
                 event: event.event,
-                customerEmail: customerEmail || 'unknown',
+                customerEmail: customerEmail,
                 amount: amountInFullCurrency,
                 currency: currency || 'NGN',
                 reference: reference || 'No Reference',
@@ -70,14 +70,14 @@ router.post('/webhook', async (req, res) => {
                 }
             }
 
-            const user = await Userschema.findOne({ username });
+            const user = await User.findOne({ email: customerEmail.toLowerCase().trim() });
 
             if (user) {
-                user.Balance += amountInFullCurrency;
+                user.balance = (user.balance || 0) + amountInFullCurrency;
                 await user.save();
-                console.log('User balance updated:', user.username);
+                console.log('User balance updated:', user.email, username ? `(username: ${username})` : '');
             } else {
-                console.warn('User not found for username:', username);
+                console.warn('User not found for email:', customerEmail, username ? `(username: ${username})` : '');
             }
         }
 
