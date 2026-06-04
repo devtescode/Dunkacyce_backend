@@ -1,4 +1,6 @@
 const Cart = require("../Models/models/cart.model");
+const Order = require("../Models/models/order.model");
+
 
 
 module.exports.getAllCarts = async (req, res) => {
@@ -54,5 +56,24 @@ module.exports.getAllCarts = async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: "Server error" });
+  }
+};
+
+// GET /orders (ADMIN - only successful paid orders)
+module.exports.getAllOrders = async (req, res) => {
+  try {
+    const orders = await Order.find({})
+      .populate("userId", "fullName email phone") // 🔥 GET USER INFO
+      .sort({ createdAt: -1 });
+
+    return res.status(200).json({
+      success: true,
+      orders,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      message: err.message,
+    });
   }
 };
