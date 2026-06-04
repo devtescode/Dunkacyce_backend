@@ -157,15 +157,27 @@ module.exports.initializePayment = async (req, res) => {
   try {
     const { email, amount, reference } = req.body;
 
+    if (!email || !amount || !reference) {
+      return res.status(400).json({
+        success: false,
+        message: "email, amount and reference are required",
+      });
+    }
+
     const response = await axios.post(
       "https://api.paystack.co/transaction/initialize",
       {
-        email,
-        amount: amount * 100,
-        reference, // 🔥 IMPORTANT
+        email: email.toLowerCase().trim(),
+        amount: Math.round(amount * 100),
+
+        // 🔥 IMPORTANT: this MUST match your Order.reference exactly
+        reference,
+
         callback_url: "https://dunnkayce-navy.vercel.app/orders",
+
         metadata: {
-          reference, // optional backup
+          reference,
+          email: email.toLowerCase().trim(),
         },
       },
       {
@@ -176,11 +188,16 @@ module.exports.initializePayment = async (req, res) => {
       }
     );
 
-    res.status(200).json(response.data.data);
+    return res.status(200).json({
+      success: true,
+      authorization_url: response.data.data.authorization_url,
+      access_code: response.data.data.access_code,
+      reference: response.data.data.reference,
+    });
   } catch (error) {
-    console.log(error.response?.data || error.message);
+    console.log("PAYSTACK INIT ERROR:", error.response?.data || error.message);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Payment initialization failed",
     });
