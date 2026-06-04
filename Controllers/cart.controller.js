@@ -156,7 +156,7 @@ module.exports.initializePayment = async (req, res) => {
       {
         email,
         amount: amount * 100,
-        callback_url: "http://localhost:8080/orders",
+        callback_url: "http://localhost:5173/orders",
       },
       {
         headers: {
