@@ -1,6 +1,9 @@
 const Food = require("../Models/models/food.model");
 const Cart = require("../Models/models/cart.model");
 const axios = require("axios");
+const crypto = require("crypto");
+const Order = require("../Models/models/order.model");
+
 
 module.exports.addToCart = async (req, res) => {
   try {
@@ -147,15 +150,37 @@ module.exports.removeFromCart = async (req, res) => {
   }
 };
 
+
+
+
 module.exports.initializePayment = async (req, res) => {
   try {
-    const { email, amount } = req.body;
+    const { email, amount, orderId } = req.body;
 
+    // 1. Find order
+    const order = await Order.findById(orderId);
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    // 2. Use ORDER reference (NOT random Paystack reference)
+    const reference = order.reference;
+
+    // 3. Initialize Paystack
     const response = await axios.post(
       "https://api.paystack.co/transaction/initialize",
       {
         email,
         amount: amount * 100,
+
+        // 🔥 VERY IMPORTANT
+        reference,
+
+        // better callback (frontend only redirect)
         callback_url: "https://dunnkayce-navy.vercel.app/orders",
       },
       {
@@ -166,14 +191,17 @@ module.exports.initializePayment = async (req, res) => {
       }
     );
 
-    res.status(200).json(response.data.data);
+    return res.status(200).json({
+      success: true,
+      data: response.data.data,
+      reference, // send back to frontend
+    });
   } catch (error) {
     console.log(error.response?.data || error.message);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Payment initialization failed",
     });
   }
-
-}
+};

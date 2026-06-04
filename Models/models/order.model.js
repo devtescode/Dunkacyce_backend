@@ -6,6 +6,9 @@ const orderItemSchema = new mongoose.Schema({
   price: { type: Number, required: true },
   qty: { type: Number, required: true },
   soupType: { type: String, default: null },
+
+  // 🆕 OPTIONAL: for image display in UI
+  image: { type: String, default: null },
 });
 
 const orderSchema = new mongoose.Schema(
@@ -39,11 +42,27 @@ const orderSchema = new mongoose.Schema(
 
     total: { type: Number, required: true },
 
-    // 🔥 ADD THIS (CRITICAL FOR PAYSTACK)
-    reference: { type: String, unique: true, required: true },
-    
+    // 🔥 THIS IS NOW THE MAIN LINK TO PAYSTACK
+    reference: {
+      type: String,
+      unique: true,
+      required: true,
+      index: true,
+    },
+
+    // 🆕 IMPORTANT FOR UI (what user actually paid)
+    amountPaid: {
+      type: Number,
+      default: 0,
+    },
 
     paidAt: { type: Date },
+
+    // 🆕 OPTIONAL TRACKING
+    paymentChannel: {
+      type: String,
+      default: null,
+    },
   },
   { timestamps: true }
 );

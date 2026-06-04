@@ -2,8 +2,8 @@ const express = require("express");
 const crypto = require("crypto");
 const router = express.Router();
 
-const PaymentDB = require("../Models/webhookModel"); 
-const Order = require("../Models/models/order.model"); // ✅ IMPORTANT FIX
+const PaymentDB = require("../Models/webhookModel");
+const Order = require("../Models/models/order.model");
 const User = require("../Models/user.models");
 
 require("dotenv").config();
@@ -11,26 +11,27 @@ require("dotenv").config();
 const PAYSTACK_SECRET = process.env.API_SECRET;
 
 /**
- * Ensure raw body is always Buffer
+ * Convert request body safely into Buffer
  */
 function getRawBody(req) {
   if (Buffer.isBuffer(req.body)) return req.body;
   if (typeof req.body === "string") return Buffer.from(req.body);
-  if (req.body instanceof Object) return Buffer.from(JSON.stringify(req.body));
+  if (req.body && typeof req.body === "object") {
+    return Buffer.from(JSON.stringify(req.body));
+  }
   return Buffer.from("");
 }
 
 router.post("/webhook", async (req, res) => {
   try {
     const signature = req.headers["x-paystack-signature"];
-
     const rawBody = getRawBody(req);
 
     if (!signature || !rawBody.length) {
-      return res.status(400).json({ error: "Missing signature or body" });
+      return res.status(400).send("Missing signature or body");
     }
 
-    // ✅ VERIFY PAYSTACK SIGNATURE
+    // 🔐 VERIFY PAYSTACK SIGNATURE
     const hash = crypto
       .createHmac("sha512", PAYSTACK_SECRET)
       .update(rawBody)
@@ -46,89 +47,91 @@ router.post("/webhook", async (req, res) => {
     console.log("📩 Paystack event:", event.event);
 
     // =========================
-    // 💳 PAYMENT SUCCESS EVENT
+    // ONLY SUCCESS PAYMENTS
     // =========================
-    if (event.event === "charge.success") {
-      const data = event.data || {};
+    if (event.event !== "charge.success") {
+      return res.status(200).send("Ignored event");
+    }
 
-      const amount = data.amount;
-      const reference = data.reference;
-      const currency = data.currency || "NGN";
-      const status = data.status;
-      const paidAt = data.paid_at;
-      const channel = data.channel;
+    const data = event.data || {};
 
-      const authorization = data.authorization || {};
+    const amount = data.amount;
+    const reference = data.reference;
+    const currency = data.currency || "NGN";
+    const status = data.status;
+    const paidAt = data.paid_at;
+    const channel = data.channel;
 
-      const email =
-        data.customer?.email ||
-        data.metadata?.customerEmail ||
-        data.metadata?.email;
+    const authorization = data.authorization || {};
 
-      const amountInNGN = amount / 100;
+    const email =
+      data.customer?.email ||
+      data.metadata?.customerEmail ||
+      data.metadata?.email;
 
-      if (!amount || !email || !reference) {
-        console.log("❌ Missing required payment data");
-        return res.status(400).send("Invalid payload");
-      }
+    const amountInNGN = amount / 100;
 
-      // =========================
-      // 💾 SAVE PAYMENT RECORD
-      // =========================
-      const existingPayment = await PaymentDB.findOne({ reference });
+    if (!amount || !reference || !email) {
+      console.log("❌ Missing required fields");
+      return res.status(400).send("Invalid payload");
+    }
 
-      if (!existingPayment) {
-        await PaymentDB.create({
-          event: event.event,
-          customerEmail: email.toLowerCase().trim(),
-          amount: amountInNGN,
-          currency,
-          reference,
-          status,
-          paidAt: paidAt ? new Date(paidAt) : new Date(),
-          authorizationCode:
-            authorization.authorization_code || "",
-          paymentMethod: "Paystack",
-          channel,
-        });
+    // =========================
+    // 💾 SAVE PAYMENT (NO DUPLICATES)
+    // =========================
+    const existingPayment = await PaymentDB.findOne({ reference });
 
-        console.log("✅ Payment saved");
-      } else {
-        console.log("⚠️ Duplicate payment ignored");
-      }
-
-      // =========================
-      // 🧾 UPDATE ORDER (IMPORTANT)
-      // =========================
-      const order = await Order.findOne({ reference });
-
-      if (order) {
-        order.paymentStatus = "Paid";
-        order.paidAt = new Date();
-        order.total = amountInNGN;
-
-        await order.save();
-
-        console.log("✅ Order marked as PAID");
-      } else {
-        console.log("⚠️ Order not found for reference:", reference);
-      }
-
-      // =========================
-      // 👤 UPDATE USER BALANCE
-      // =========================
-      const user = await User.findOne({
-        email: email.toLowerCase().trim(),
+    if (!existingPayment) {
+      await PaymentDB.create({
+        event: "charge.success",
+        customerEmail: email.toLowerCase().trim(),
+        amount: amountInNGN,
+        currency,
+        reference,
+        status,
+        paidAt: paidAt ? new Date(paidAt) : new Date(),
+        authorizationCode: authorization.authorization_code || "",
+        paymentMethod: "Paystack",
+        channel,
       });
 
-      if (user) {
-        user.balance = (user.balance || 0) + amountInNGN;
-        await user.save();
+      console.log("✅ Payment saved");
+    } else {
+      console.log("⚠️ Payment already exists (ignored)");
+    }
 
-        console.log("👤 User balance updated:", user.email);
-      } else {
-        console.warn("⚠️ User not found:", email);
-      }
+    // =========================
+    // 🧾 UPDATE ORDER
+    // =========================
+    const order = await Order.findOne({ reference });
+
+    if (order) {
+      order.paymentStatus = "Paid";
+      order.paidAt = new Date(paidAt || Date.now());
+      order.amountPaid = amountInNGN;
+      order.paymentChannel = channel;
+
+      await order.save();
+
+      console.log("✅ Order updated to PAID");
+    } else {
+      console.log("⚠️ Order not found for reference:", reference);
+    }
+
+    // =========================
+    // 👤 UPDATE USER BALANCE
+    // =========================
+    const user = await User.findOne({
+      email: email.toLowerCase().trim(),
+    });
+
+    if (user) {
+      user.balance = (user.balance || 0) + amountInNGN;
+      await user.save();
+
+      console.log("👤 User balance updated:", user.email);
+    } else {
+      console.warn("⚠️ User not found:", email);
     }
 
     return res.status(200).send("OK");
