@@ -41,6 +41,7 @@ const orderSchema = new mongoose.Schema(
 
     // 🔥 ADD THIS (CRITICAL FOR PAYSTACK)
     reference: { type: String, unique: true, required: true },
+    
 
     paidAt: { type: Date },
   },

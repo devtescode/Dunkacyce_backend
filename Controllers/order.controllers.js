@@ -1,18 +1,18 @@
-const express = require("express");
-const router = express.Router();
 const Order = require("../Models/models/order.model");
 
-// GET USER ORDERS
+// GET USER PAID ORDERS
 module.exports.getAllOrders = async (req, res) => {
-
   try {
-    const orders = await Order.find({ userId: req.params.id }).sort({
-      createdAt: -1,
-    });
+    console.log("USER ID:", req.params.id);
 
-    res.json({ orders });
+    const orders = await Order.find({
+      userId: req.params.id,
+      paymentStatus: "Paid",
+    }).sort({ createdAt: -1 });
+
+    res.status(200).json({ orders });
   } catch (err) {
+    console.error("ORDER FETCH ERROR:", err); // 🔥 IMPORTANT
     res.status(500).json({ message: err.message });
   }
-
-}
+};
