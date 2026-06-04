@@ -19,7 +19,6 @@ module.exports.getAllOrders = async (req, res) => {
 };
 
 module.exports.create = async (req, res) => {
-    // router.post("/create", async (req, res) => {
     try {
         const {
             userId,
@@ -30,12 +29,31 @@ module.exports.create = async (req, res) => {
             paymentMethod,
         } = req.body;
 
-        // 🔥 GENERATE SAFE UNIQUE REFERENCE
+        if (!items || items.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Cart is empty",
+            });
+        }
+
+        // 🔥 GENERATE SAFE UNIQUE REFERENCE (USED FOR PAYSTACK + ORDER LINKING)
         const reference = crypto.randomBytes(6).toString("hex");
+
+        // 🔥 FIX ITEMS STRUCTURE (IMPORTANT PART)
+        const formattedItems = items.map(item => ({
+            foodId: item.foodId,
+            name: item.name,
+            price: item.price,
+            qty: item.quantity || item.qty, // 🔥 FIX YOUR ERROR HERE
+            soupType: item.soupType || null,
+
+            // ⚠️ optional (only if cart already has image)
+            image: item.image || null,
+        }));
 
         const order = await Order.create({
             userId,
-            items,
+            items: formattedItems,
             hostel,
             room,
             total,
@@ -43,6 +61,9 @@ module.exports.create = async (req, res) => {
             reference,
             paymentStatus: "Pending",
             status: "Pending",
+            deliveryFee: 100,
+            amountPaid: 0,
+            paymentChannel: null,
         });
 
         return res.status(201).json({
@@ -50,12 +71,12 @@ module.exports.create = async (req, res) => {
             order,
             reference,
         });
+
     } catch (err) {
-        console.error("ORDER CREATE ERROR:", err); // 🔥 IMPORTANT
+        console.error("ORDER CREATE ERROR:", err);
         return res.status(500).json({
             success: false,
             message: err.message,
         });
     }
-    // });
-}
+};
