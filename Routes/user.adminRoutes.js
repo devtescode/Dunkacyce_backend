@@ -1,5 +1,7 @@
 const express = require("express")
 const { adminExists, registerAdmin, loginAdmin } = require("../Controllers/admin.controllers")
+const { getAllCarts } = require("../Controllers/admin.cart.controllers");
+
 const router = express.Router()
 
 
@@ -9,6 +11,8 @@ const router = express.Router()
 router.get("/exists", adminExists)
 router.post("/register", registerAdmin)
 router.post("/login", loginAdmin)
+
+router.get("/carts", getAllCarts);
 
 
 module.exports = router
