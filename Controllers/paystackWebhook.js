@@ -5,6 +5,7 @@ const router = express.Router();
 const PaymentDB = require("../Models/webhookModel");
 const Order = require("../Models/models/order.model");
 const User = require("../Models/user.models");
+const Cart = require("../Models/models/cart.model"); // ✅ IMPORTANT ADD
 
 require("dotenv").config();
 
@@ -77,60 +78,55 @@ router.post("/webhook", async (req, res) => {
         // =========================
         // 🧠 PREVENT DOUBLE PROCESSING
         // =========================
-        const alreadyProcessed = await PaymentDB.findOne({
-            reference,
-            status: "success",
-        });
+        const alreadyProcessed = await PaymentDB.findOne({ reference });
 
         if (alreadyProcessed) {
-            console.log("⚠️ Payment already processed, skipping...");
+            console.log("⚠️ Payment already processed");
             return res.status(200).send("OK");
         }
 
         // =========================
-        // 💾 SAVE PAYMENT (NO DUPLICATES)
+        // 💾 SAVE PAYMENT
         // =========================
-        const existingPayment = await PaymentDB.findOne({ reference });
+        await PaymentDB.create({
+            event: "charge.success",
+            customerEmail: email.toLowerCase().trim(),
+            amount: amountInNGN,
+            currency,
+            reference,
+            status,
+            paidAt: paidAt ? new Date(paidAt) : new Date(),
+            authorizationCode: authorization.authorization_code || "",
+            paymentMethod: "Paystack",
+            channel,
+        });
 
-        if (!existingPayment) {
-            await PaymentDB.create({
-                event: "charge.success",
-                customerEmail: email.toLowerCase().trim(),
-                amount: amountInNGN,
-                currency,
-                reference,
-                status,
-                paidAt: paidAt ? new Date(paidAt) : new Date(),
-                authorizationCode: authorization.authorization_code || "",
-                paymentMethod: "Paystack",
-                channel,
-            });
-
-            console.log("✅ Payment saved");
-        } else {
-            console.log("⚠️ Payment already exists (ignored)");
-        }
+        console.log("✅ Payment saved");
 
         // =========================
-        // 🧾 UPDATE ORDER (SAFE UPDATE)
+        // 🧾 UPDATE ORDER
         // =========================
         const order = await Order.findOne({ reference });
 
         if (order) {
-            await Order.updateOne(
-                { reference },
-                {
-                    $set: {
-                        paymentStatus: "Paid",
-                        paidAt: new Date(paidAt || Date.now()),
-                        amountPaid: amountInNGN,
-                        paymentChannel: channel,
-                        status: "Preparing",
-                    },
-                }
-            );
+            order.paymentStatus = "Paid";
+            order.amountPaid = amountInNGN;
+            order.paymentChannel = channel;
+            order.paidAt = new Date(paidAt || Date.now());
+            order.status = "Preparing";
+
+            await order.save();
 
             console.log("✅ Order updated to PAID");
+
+            // =========================
+            // 🛒 CLEAR CART AFTER PAYMENT
+            // =========================
+            await Cart.deleteMany({
+                userId: order.userId,
+            });
+
+            console.log("🛒 Cart cleared after payment");
         } else {
             console.log("⚠️ Order not found for reference:", reference);
         }
