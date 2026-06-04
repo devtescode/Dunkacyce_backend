@@ -40,12 +40,12 @@ mongoose
 app.use('/admin', adminRoutes);
 app.use('/dunnkayce', userRoutes);
 
-app.use('/api/paystack', 
-  express.raw({ type: '*/*' }),  
+app.use(
+  "/api/paystack",
+  express.raw({ type: "application/json" }), // IMPORTANT: only JSON
   (req, res, next) => {
-      req.rawBody = req.body;  
-      console.log('Captured Raw Body:', req.rawBody.toString('utf8')); 
-      next(); 
+    req.rawBody = req.body; // Buffer
+    next();
   },
   paystackroute
 );
