@@ -2,6 +2,9 @@ const Admin = require("../Models/admin.model");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
+const User = require("../Models/user.models");
+const Order = require("../Models/models/order.model");
+
 // =========================
 // CHECK IF ADMIN EXISTS
 // =========================
@@ -107,3 +110,51 @@ module.exports.loginAdmin = async (req, res) => {
     });
   }
 };
+
+module.exports.dashboardstats = async (req, res) => {
+  try {
+    // -----------------------
+    // DATE RANGE (this week)
+    // -----------------------
+    const now = new Date();
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() - now.getDay()); // Sunday start
+    startOfWeek.setHours(0, 0, 0, 0);
+
+    const endOfWeek = new Date();
+    endOfWeek.setHours(23, 59, 59, 999);
+
+    // -----------------------
+    // TOTAL USERS
+    // -----------------------
+    const totalStudents = await User.countDocuments();
+
+    // -----------------------
+    // TOTAL ORDERS
+    // -----------------------
+    const totalOrders = await Order.countDocuments();
+
+    // -----------------------
+    // WEEKLY REVENUE
+    // (ONLY PAID ORDERS)
+    // -----------------------
+    const paidOrders = await Order.find({
+      paymentStatus: "Paid",
+      createdAt: { $gte: startOfWeek, $lte: endOfWeek },
+    });
+
+    const weeklyRevenue = paidOrders.reduce(
+      (sum, order) => sum + (order.total || 0),
+      0
+    );
+
+    res.json({
+      totalStudents,
+      totalOrders,
+      weeklyRevenue,
+    });
+  } catch (err) {
+    console.error("Dashboard stats error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+}

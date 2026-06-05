@@ -1,5 +1,5 @@
 const express = require("express")
-const { adminExists, registerAdmin, loginAdmin } = require("../Controllers/admin.controllers")
+const { adminExists, registerAdmin, loginAdmin, dashboardstats } = require("../Controllers/admin.controllers")
 const { getAllCarts, getAllOrders } = require("../Controllers/admin.cart.controllers");
 
 const router = express.Router()
@@ -11,6 +11,7 @@ const router = express.Router()
 router.get("/exists", adminExists)
 router.post("/register", registerAdmin)
 router.post("/login", loginAdmin)
+router.get("/dashboard-stats", dashboardstats);
 
 router.get("/carts", getAllCarts);
 router.get("/getorders", getAllOrders);

@@ -86,3 +86,45 @@ module.exports.create = async (req, res) => {
         });
     }
 };
+
+
+exports.getUserReceipts = async (req, res) => {
+  try {
+    const userId = req.params.id;
+
+    console.log("USER ID:", userId);
+
+    // IMPORTANT: ensure ObjectId match
+    const orders = await Order.find({
+      userId: new mongoose.Types.ObjectId(userId),
+      paymentStatus: "Paid",
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    console.log("ORDERS FOUND:", orders.length);
+
+    return res.status(200).json({
+      success: true,
+      orders: orders.map((o) => ({
+        _id: o._id,
+        total: o.total,
+        hostel: o.hostel,
+        room: o.room,
+        items: o.items,
+        paymentMethod: o.paymentMethod,
+        paymentStatus: o.paymentStatus,
+        reference: o.reference,
+        createdAt: o.createdAt,
+        paidAt: o.paidAt,
+        userId: o.userId,
+      })),
+    });
+  } catch (err) {
+    console.error("RECEIPT ERROR:", err);
+    return res.status(500).json({
+      success: false,
+      message: err.message,
+    });
+  }
+};
