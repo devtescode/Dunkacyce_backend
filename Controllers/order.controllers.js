@@ -2,22 +2,28 @@ const Order = require("../Models/models/order.model");
 const crypto = require("crypto");
 
 // GET USER PAID ORDERS
+const mongoose = require("mongoose");
+
 module.exports.getAllOrders = async (req, res) => {
-    try {
-        console.log("USER ID:", req.params.id);
+  try {
+    console.log("USER ID:", req.params.id);
 
-        const orders = await Order.find({
-            userId: req.params.id,
-            paymentStatus: "Paid",
-        }).sort({ createdAt: -1 });
+    const userId = new mongoose.Types.ObjectId(req.params.id);
 
-        res.status(200).json({ orders });
-    } catch (err) {
-        console.error("ORDER FETCH ERROR:", err); // 🔥 IMPORTANT
-        res.status(500).json({ message: err.message });
-    }
+    const orders = await Order.find({
+      userId: userId,
+      paymentStatus: "Paid",
+    }).sort({ createdAt: -1 });
+
+    console.log("ORDERS FOUND:", orders.length);
+
+    return res.status(200).json({ orders });
+
+  } catch (err) {
+    console.error("ORDER FETCH ERROR:", err);
+    return res.status(500).json({ message: err.message });
+  }
 };
-
 module.exports.create = async (req, res) => {
     try {
         const {
