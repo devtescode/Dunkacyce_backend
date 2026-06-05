@@ -9,6 +9,7 @@ const foodRoutes = require('./Routes/food.routes');
 const cartRoutes = require('./Routes/cart.routes');
 // const Payment = require('./Routes/payments')
 const paystackroute = require('./Controllers/paystackWebhook');
+const settingRoutes = require('./Routes/settings.routes');
 
 // const cloudinary = require("./config/cloudinary"); 
 
@@ -26,6 +27,7 @@ app.use(express.json({ limit: '200mb' }));
 app.use('/food', foodRoutes);
 app.use('/cart', cartRoutes);
 app.use('/orders', require('./Routes/order.routes'));
+app.use('/settings', settingRoutes);
 
 mongoose
     .connect(URI)
