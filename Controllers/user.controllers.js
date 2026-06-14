@@ -128,3 +128,71 @@ module.exports.login = async (req, res) => {
     });
   }
 };
+
+
+
+module.exports.changePasswordPage = async (req, res) => {
+  try {
+    const { oldPassword, newPassword } = req.body;
+
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "All fields are required",
+      });
+    }
+
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // check old password
+    const isMatch = await bcrypt.compare(
+      oldPassword,
+      user.password
+    );
+
+    if (!isMatch) {
+      return res.status(400).json({
+        success: false,
+        message: "Current password is incorrect",
+      });
+    }
+
+    // 🚨 NEW RULE: new password must not equal old password
+    const isSamePassword = await bcrypt.compare(
+      newPassword,
+      user.password
+    );
+
+    if (isSamePassword) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "New password cannot be the same as current password",
+      });
+    }
+
+    // set new password (model will hash it)
+    user.password = newPassword;
+
+    await user.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Password updated successfully",
+    });
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
