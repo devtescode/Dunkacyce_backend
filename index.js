@@ -16,30 +16,24 @@ const paystackroute = require("./Controllers/paystackWebhook");
 
 const app = express();
 const server = http.createServer(app);
+
 const PORT = process.env.PORT || 5000;
 const URI = process.env.URI;
 
-/* ================= SOCKET.IO SETUP ================= */
-// const io = new Server(server, {
-//   cors: {
-//     origin: "http://localhost:5173", // 👈 IMPORTANT
-//     credentials: true,
-//     methods: ["GET", "POST", "PUT", "DELETE"],
-//   },
-// });
-
+/* ================= SOCKET.IO ================= */
 const io = new Server(server, {
   cors: {
-    origin: ["http://localhost:5173", "https://dunnkayce-navy.vercel.app"],
-    methods: ["GET", "POST"],
+    origin: [
+      "http://localhost:5173",
+      "https://dunnkayce-navy.vercel.app",
+    ],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
     credentials: true,
   },
   path: "/socket.io",
   transports: ["websocket", "polling"],
 });
 
-
-// make io available everywhere (controllers)
 app.set("io", io);
 
 io.on("connection", (socket) => {
@@ -50,18 +44,33 @@ io.on("connection", (socket) => {
   });
 });
 
-/* ================= MIDDLEWARE ================= */
-// app.use(cors());
+/* ================= CORS (SINGLE SOURCE OF TRUTH) ================= */
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://dunnkayce-navy.vercel.app",
+];
+
 app.use(
   cors({
-    origin: [
-      "http://localhost:5173",
-      "https://dunnkayce-navy.vercel.app",
-    ],
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true); // allow server-to-server / webhook
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error("Not allowed by CORS"));
+    },
     credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
+
+/* ✅ IMPORTANT: preflight handling */
+app.options(/.*/, cors());
+
+/* ================= BODY PARSER ================= */
 app.use(express.urlencoded({ extended: true, limit: "200mb" }));
 app.use(express.json({ limit: "200mb" }));
 
@@ -70,7 +79,6 @@ app.use("/food", foodRoutes);
 app.use("/cart", cartRoutes);
 app.use("/orders", require("./Routes/order.routes"));
 app.use("/settings", settingRoutes);
-
 app.use("/admin", adminRoutes);
 app.use("/dunnkayce", userRoutes);
 
@@ -90,23 +98,19 @@ app.get("/", (req, res) => {
   res.status(200).json({ message: "Welcome to Dunnkayce Backend" });
 });
 
-/* ================= DB CONNECTION ================= */
+/* ================= DB ================= */
 mongoose
   .connect(URI)
-  .then(() => {
-    console.log("✅ Database connected successfully Dunnkayce Backend");
-  })
-  .catch((err) => {
-    console.error("❌ Database connection error:", err);
-  });
+  .then(() => console.log("✅ Database connected"))
+  .catch((err) => console.error("❌ DB error:", err));
 
-/* ================= GLOBAL ERROR HANDLER ================= */
+/* ================= ERROR HANDLER ================= */
 app.use((err, req, res, next) => {
-  console.error("Error:", err.message);
+  console.error(err.message);
   res.status(500).json({ message: "Internal Server Error" });
 });
 
 /* ================= START SERVER ================= */
 server.listen(PORT, () => {
-  console.log(`🚀 Server is running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
