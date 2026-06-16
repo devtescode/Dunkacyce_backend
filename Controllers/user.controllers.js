@@ -151,7 +151,6 @@ module.exports.changePasswordPage = async (req, res) => {
       });
     }
 
-    // check old password
     const isMatch = await bcrypt.compare(
       oldPassword,
       user.password
