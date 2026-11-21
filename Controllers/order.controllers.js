@@ -160,20 +160,27 @@ module.exports.updateOrderStatus = async (req, res) => {
 
     const previousStatus = existingOrder.status;
 
-    // 🧱 BUILD $set — NEVER OVERWRITE EXISTING EVIDENCE TIMESTAMPS
+    // 🧱 ATOMIC UPDATE — never overwrite an existing evidence timestamp.
+    // $ifNull makes the "stamp only when missing" check part of the write itself,
+    // so two concurrent admins cannot both claim the same ready/delivered time.
+    const now = new Date();
     const $set = { status };
-    if (status === "Ready" && !existingOrder.readyAt) {
-      $set.readyAt = new Date();
+
+    if (status === "Ready") {
+      // Re-opening a delivered order starts a fresh arrival window.
+      $set.readyAt = previousStatus === "Delivered" ? now : { $ifNull: ["$readyAt", now] };
     }
-    if (status === "Delivered" && !existingOrder.deliveredAt) {
-      $set.deliveredAt = new Date();
+    if (status === "Delivered") {
+      $set.deliveredAt = { $ifNull: ["$deliveredAt", now] };
     }
 
-    const updated = await Order.findByIdAndUpdate(
-      id,
-      { $set },
-      { new: true, runValidators: true }
-    );
+    const update = { $set };
+    // A reversal invalidates the old delivery evidence.
+    if (status !== "Delivered" && previousStatus === "Delivered") {
+      update.$unset = { deliveredAt: "" };
+    }
+
+    const updated = await Order.findByIdAndUpdate(id, [update], { new: true });
 
     if (!updated) {
       return res.status(404).json({
@@ -182,38 +189,42 @@ module.exports.updateOrderStatus = async (req, res) => {
       });
     }
 
-    // 🔔 REAL-TIME ORDER STATUS BROADCAST (only after DB write succeeds)
-    const io = req.app.get("io");
-    if (io) {
-      const uid = updated.userId?._id ?? updated.userId;
-      const payload = {
-        orderId: String(updated._id),
-        userId: String(uid),
-        status: updated.status,
-        previousStatus,
-        readyAt: updated.readyAt || null,
-        deliveredAt: updated.deliveredAt || null,
-        etaMinutes: Number(updated.etaMinutes) || 8,
-        reference: updated.reference,
-        hostel: updated.hostel,
-        room: updated.room,
-        total: updated.total,
-        items: updated.items,
-        createdAt: updated.createdAt,
-      };
+    // 🔔 REAL-TIME ORDER STATUS BROADCAST — never fail a committed update.
+    try {
+      const io = req.app.get("io");
+      if (io) {
+        const uid = updated.userId?._id ?? updated.userId;
+        const payload = {
+          orderId: String(updated._id),
+          userId: String(uid),
+          status: updated.status,
+          previousStatus,
+          readyAt: updated.readyAt || null,
+          deliveredAt: updated.deliveredAt || null,
+          etaMinutes: Number(updated.etaMinutes) || 8,
+          reference: updated.reference,
+          hostel: updated.hostel,
+          room: updated.room,
+          total: updated.total,
+          items: updated.items,
+          createdAt: updated.createdAt,
+        };
 
-      io.to(`user:${uid}`).emit("order_status_updated", payload);
-      io.to("admins").emit("order_status_updated", payload);
+        io.to(`user:${uid}`).emit("order_status_updated", payload);
+        io.to("admins").emit("order_status_updated", payload);
 
-      if (status === "Ready") {
-        io.to(`user:${uid}`).emit("order_ready", payload);
-        io.to("admins").emit("order_ready", payload);
+        if (status === "Ready") {
+          io.to(`user:${uid}`).emit("order_ready", payload);
+          io.to("admins").emit("order_ready", payload);
+        }
+
+        if (status === "Delivered") {
+          io.to(`user:${uid}`).emit("order_delivered", payload);
+          io.to("admins").emit("order_delivered", payload);
+        }
       }
-
-      if (status === "Delivered") {
-        io.to(`user:${uid}`).emit("order_delivered", payload);
-        io.to("admins").emit("order_delivered", payload);
-      }
+    } catch (emitError) {
+      console.error("ORDER STATUS SOCKET EMIT ERROR:", emitError.message);
     }
 
     return res.status(200).json({
