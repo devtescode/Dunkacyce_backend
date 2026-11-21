@@ -176,4 +176,46 @@ module.exports.dashboardstats = async (req, res) => {
     console.error("Dashboard stats error:", err);
     res.status(500).json({ message: "Server error" });
   }
-}
+};
+
+// =========================
+// GET ALL USERS (ADMIN)
+// =========================
+module.exports.getAllUsers = async (req, res) => {
+  try {
+    let users = await User.find()
+      .select("email fullName phone balance gender profilePicture createdAt updatedAt")
+      .lean()
+      .sort({ createdAt: -1 });
+
+    const paidOrderStats = await Order.aggregate([
+      { $match: { paymentStatus: "Paid" } },
+      {
+        $group: {
+          _id: "$userId",
+          orderCount: { $sum: 1 },
+          totalPaid: { $sum: "$total" },
+        },
+      },
+    ]);
+
+    const statsByUserId = new Map(
+      paidOrderStats.map((stat) => [String(stat._id), stat])
+    );
+
+    users = users.map((user) => {
+      const stats = statsByUserId.get(String(user._id));
+
+      return {
+        ...user,
+        orderCount: stats ? stats.orderCount : 0,
+        totalPaid: stats ? stats.totalPaid : 0,
+      };
+    });
+
+    res.json({ users });
+  } catch (err) {
+    console.error("Get all users error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};

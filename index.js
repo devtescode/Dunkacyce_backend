@@ -116,6 +116,17 @@ app.use(
 /* ✅ IMPORTANT: preflight handling */
 app.options(/.*/, cors());
 
+/* ================= PAYSTACK WEBHOOK ================= */
+app.use(
+  "/api/paystack",
+  express.raw({ type: "application/json" }),
+  (req, res, next) => {
+    req.rawBody = req.body;
+    next();
+  },
+  paystackroute
+);
+
 /* ================= BODY PARSER ================= */
 app.use(express.urlencoded({ extended: true, limit: "200mb" }));
 app.use(express.json({ limit: "200mb" }));
@@ -127,17 +138,6 @@ app.use("/orders", require("./Routes/order.routes"));
 app.use("/settings", settingRoutes);
 app.use("/admin", adminRoutes);
 app.use("/dunnkayce", userRoutes);
-
-/* ================= PAYSTACK WEBHOOK ================= */
-app.use(
-  "/api/paystack",
-  express.raw({ type: "application/json" }),
-  (req, res, next) => {
-    req.rawBody = req.body;
-    next();
-  },
-  paystackroute
-);
 
 /* ================= HOME ================= */
 app.get("/", (req, res) => {
