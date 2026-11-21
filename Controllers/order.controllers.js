@@ -167,6 +167,23 @@ module.exports.updateOrderStatus = async (req, res) => {
 
     const previousStatus = existingOrder.status;
 
+    // 🔒 DELIVERED IS TERMINAL — a handoff is final and must never be reverted.
+    // A repeated "Delivered" request is a harmless no-op; any other transition
+    // from Delivered is rejected before any write or broadcast happens.
+    if (previousStatus === "Delivered") {
+      if (status === "Delivered") {
+        return res.status(200).json({
+          success: true,
+          order: existingOrder,
+          message: "This order has already been delivered.",
+        });
+      }
+      return res.status(409).json({
+        success: false,
+        message: "This order has already been delivered and its status cannot be changed.",
+      });
+    }
+
     // 🧱 ATOMIC UPDATE — never overwrite an existing evidence timestamp.
     // $ifNull makes the "stamp only when missing" check part of the write itself,
     // so two concurrent admins cannot both claim the same ready/delivered time.
@@ -174,8 +191,7 @@ module.exports.updateOrderStatus = async (req, res) => {
     const $set = { status };
 
     if (status === "Ready") {
-      // Re-opening a delivered order starts a fresh arrival window.
-      $set.readyAt = previousStatus === "Delivered" ? now : { $ifNull: ["$readyAt", now] };
+      $set.readyAt = { $ifNull: ["$readyAt", now] };
     }
     if (status === "Delivered") {
       $set.deliveredAt = { $ifNull: ["$deliveredAt", now] };
@@ -208,27 +224,9 @@ module.exports.updateOrderStatus = async (req, res) => {
       }
     }
 
-    // Build a valid aggregation pipeline: each stage holds exactly one operator.
-    // The legacy { $unset: { field: "" } } shape is invalid inside a pipeline;
-    // $unset there takes the field name directly.
+    // Single $set stage — delivered orders never reach this point, so no
+    // evidence is ever cleared once a handoff has been recorded.
     const pipeline = [{ $set }];
-    if (status !== "Delivered" && previousStatus === "Delivered") {
-      // A reversal invalidates the old delivery evidence. Each field gets its
-      // own stage to preserve the one-operator-per-stage pipeline rule.
-      pipeline.push({ $unset: "deliveredAt" });
-      pipeline.push({ $unset: "etaDeadlineAt" });
-      pipeline.push({ $unset: "deliveredBeforeDeadline" });
-      pipeline.push({ $unset: "lateByMs" });
-      pipeline.push({ $unset: "etaMinutesUsed" });
-      pipeline.push({ $unset: "readyAtUsed" });
-      pipeline.push({ $unset: "deliveredBy" });
-      // Re-opening to Pending/Preparing also invalidates the old arrival window,
-      // so the next Ready stamps a fresh readyAt instead of reusing a stale one.
-      // (Delivered -> Ready keeps its freshly stamped readyAt from $set above.)
-      if (status === "Pending" || status === "Preparing") {
-        pipeline.push({ $unset: "readyAt" });
-      }
-    }
 
     let updated;
     try {

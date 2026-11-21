@@ -25,6 +25,131 @@ function getRawBody(req) {
     return Buffer.from("");
 }
 
+/**
+ * Send the admin payment alert (and the student order status update) exactly once
+ * per paid order. The marker is written straight to the orders collection so it
+ * survives a PaymentDB claim rollback (e.g. when cart clearing fails afterwards).
+ * The atomic update is what keeps duplicate/retried webhooks from double-notifying.
+ * If an emit fails, the marker is released so a retry can still deliver the alert.
+ */
+async function emitPaymentConfirmation(req, order, options = {}) {
+    const io = req.app.get("io");
+
+    // No Socket.IO instance means we cannot deliver an alert right now, but the
+    // payment itself is still valid. Skip the notification without claiming the
+    // marker so cart clearing and balance crediting are never aborted, and a
+    // later duplicate/retry (if Socket.IO is available) can still deliver it.
+    if (!io) {
+        console.warn("⚠️ Socket.IO instance unavailable, skipping payment alert:", order.reference);
+        return false;
+    }
+
+    const claim = await Order.collection.updateOne(
+        { _id: order._id, adminPaymentNotified: { $ne: true } },
+        { $set: { adminPaymentNotified: true } }
+    );
+
+    if (!claim.matchedCount) {
+        console.log("🔕 Payment confirmation already emitted, skipping duplicate:", order.reference);
+        return false;
+    }
+
+    let student = null;
+    try {
+        const populatedOrder = await Order.findById(order._id).populate("userId", "fullName email phone");
+        const u = populatedOrder?.userId;
+        if (u && typeof u === "object") {
+            student = {
+                _id: u._id,
+                fullName: u.fullName || null,
+                email: u.email || null,
+                phone: u.phone || null,
+            };
+        }
+    } catch (populateErr) {
+        console.warn("⚠️ Could not populate student for payment alert:", populateErr.message);
+    }
+
+    if (!student) {
+        try {
+            const u = await User.findById(order.userId).select("fullName email phone");
+            if (u) {
+                student = {
+                    _id: u._id,
+                    fullName: u.fullName || null,
+                    email: u.email || null,
+                    phone: u.phone || null,
+                };
+            }
+        } catch (userErr) {
+            console.warn("⚠️ Could not load student for payment alert:", userErr.message);
+        }
+    }
+
+    const payload = {
+        orderId: order._id,
+        reference: order.reference,
+        amountPaid: order.amountPaid,
+        total: order.total,
+        paidAt: order.paidAt,
+        paymentChannel: order.paymentChannel,
+        paymentStatus: order.paymentStatus,
+        status: order.status,
+        fulfillmentStatus: order.status,
+        hostel: order.hostel,
+        room: order.room,
+        userId: order.userId,
+        student,
+        items: order.items,
+        itemCount: Array.isArray(order.items) ? order.items.length : 0,
+        createdAt: order.createdAt,
+    };
+
+    try {
+        io.to("admins").emit("payment_confirmed", payload);
+        console.log("🔔 Admin payment alert emitted:", order.reference);
+
+        // 🔔 REAL-TIME ORDER STATUS UPDATE (student room)
+        // Skipped on the recovered-failure path: that order may already be
+        // Ready/Delivered, so a stale "Preparing" update would regress it.
+        if (options.emitOrderStatusUpdate !== false) {
+            const statusPayload = {
+                orderId: String(order._id),
+                userId: String(order.userId),
+                status: "Preparing",
+                previousStatus: "Pending",
+                readyAt: null,
+                deliveredAt: null,
+                etaMinutes: Number(order.etaMinutes) || 8,
+                reference: order.reference,
+                hostel: order.hostel,
+                room: order.room,
+                total: order.total,
+                items: order.items,
+                createdAt: order.createdAt,
+            };
+
+            io.to(`user:${String(order.userId)}`).emit("order_status_updated", statusPayload);
+        }
+
+        return true;
+    } catch (emitError) {
+        // A failed emit must never leave the durable marker set, otherwise
+        // retries would permanently suppress the alert. Release it and rethrow
+        // so the caller rolls back its PaymentDB claim and Paystack retries.
+        console.error("❌ Payment confirmation emit failed, releasing marker for retry:", order.reference, emitError);
+        try {
+            await Order.collection.updateOne(
+                { _id: order._id, adminPaymentNotified: true },
+                { $unset: { adminPaymentNotified: "" } }
+            );
+        } catch (releaseError) {
+            console.error("⚠️ Failed to release payment notification marker:", order.reference, releaseError);
+        }
+        throw emitError;
+    }
+}
+
 router.post("/webhook", async (req, res) => {
     try {
         const signature = req.headers["x-paystack-signature"];
@@ -79,8 +204,6 @@ router.post("/webhook", async (req, res) => {
 
         // =========================
         // 🧠 PREVENT DOUBLE PROCESSING
-                // =========================
-        // PREVENT DOUBLE PROCESSING
         // =========================
         const alreadyProcessed = await PaymentDB.findOne({ reference });
 
@@ -129,6 +252,15 @@ router.post("/webhook", async (req, res) => {
                     // Extra safety guard: avoid double-processing side effects.
                     shouldCreditBalance = false;
                     console.log("⚠️ Order already paid/stock decremented, skipping confirmation side effects:", reference);
+
+                    // A genuine duplicate is filtered out by the PaymentDB claim
+                    // check above. Reaching here with a freshly created claim means
+                    // an earlier attempt saved the order but failed before notifying
+                    // admins, so deliver the alert once on this retry (no re-save,
+                    // no second stock decrement). The order may already be
+                    // Ready/Delivered, so emit only the payment confirmation and
+                    // skip the stale "Preparing" student status update.
+                    await emitPaymentConfirmation(req, order, { emitOrderStatusUpdate: false });
                 } else {
                     // =========================
                     // 📦 DECREMENT SWALLOW STOCK (IDEMPOTENT GUARD VIA stockDecremented)
@@ -192,6 +324,14 @@ router.post("/webhook", async (req, res) => {
                     console.log("✅ Order updated to PAID");
 
                     // =========================
+                    // 🔔 REAL-TIME ALERTS
+                    // =========================
+                    // Notify immediately after the successful save, before cart
+                    // clearing / balance crediting can throw. The durable marker
+                    // inside the helper makes any later retry dedupe safely.
+                    await emitPaymentConfirmation(req, order);
+
+                    // =========================
                     // 🛒 CLEAR CART AFTER PAYMENT
                     // =========================
                     await Cart.deleteMany({
@@ -199,85 +339,6 @@ router.post("/webhook", async (req, res) => {
                     });
 
                     console.log("🛒 Cart cleared after payment");
-
-                    // =========================
-                    // 🔔 REAL-TIME ADMIN ALERT
-                    // =========================
-                    const io = req.app.get("io");
-                    if (io) {
-                        let student = null;
-                        try {
-                            const populatedOrder = await Order.findById(order._id).populate("userId", "fullName email phone");
-                            const u = populatedOrder?.userId;
-                            if (u && typeof u === "object") {
-                                student = {
-                                    _id: u._id,
-                                    fullName: u.fullName || null,
-                                    email: u.email || null,
-                                    phone: u.phone || null,
-                                };
-                            }
-                        } catch (populateErr) {
-                            console.warn("⚠️ Could not populate student for payment alert:", populateErr.message);
-                        }
-
-                        if (!student) {
-                            try {
-                                const u = await User.findById(order.userId).select("fullName email phone");
-                                if (u) {
-                                    student = {
-                                        _id: u._id,
-                                        fullName: u.fullName || null,
-                                        email: u.email || null,
-                                        phone: u.phone || null,
-                                    };
-                                }
-                            } catch (userErr) {
-                                console.warn("⚠️ Could not load student for payment alert:", userErr.message);
-                            }
-                        }
-
-                        const payload = {
-                            orderId: order._id,
-                            reference: order.reference,
-                            amountPaid: order.amountPaid,
-                            total: order.total,
-                            paidAt: order.paidAt,
-                            paymentChannel: order.paymentChannel,
-                            paymentStatus: order.paymentStatus,
-                            status: order.status,
-                            fulfillmentStatus: order.status,
-                            hostel: order.hostel,
-                            room: order.room,
-                            userId: order.userId,
-                            student,
-                            items: order.items,
-                            itemCount: Array.isArray(order.items) ? order.items.length : 0,
-                            createdAt: order.createdAt,
-                        };
-
-                        io.to("admins").emit("payment_confirmed", payload);
-                        console.log("🔔 Admin payment alert emitted:", order.reference);
-
-                        // 🔔 REAL-TIME ORDER STATUS UPDATE (student room)
-                        const statusPayload = {
-                            orderId: String(order._id),
-                            userId: String(order.userId),
-                            status: "Preparing",
-                            previousStatus: "Pending",
-                            readyAt: null,
-                            deliveredAt: null,
-                            etaMinutes: Number(order.etaMinutes) || 8,
-                            reference: order.reference,
-                            hostel: order.hostel,
-                            room: order.room,
-                            total: order.total,
-                            items: order.items,
-                            createdAt: order.createdAt,
-                        };
-
-                        io.to(`user:${String(order.userId)}`).emit("order_status_updated", statusPayload);
-                    }
                 }
             } else {
                 console.log("⚠️ Order not found for reference:", reference);

@@ -101,7 +101,7 @@ test("updateOrderStatus enables updatePipeline for aggregation-style updates", a
   assert.deepEqual(Object.keys(call.update[1][0]), ["$set"]);
 });
 
-test("updateOrderStatus sets deliveredAt and clears stale evidence on reversal", async () => {
+test("updateOrderStatus stamps deliveredAt when moving to Delivered", async () => {
   const delivered = loadController("Ready");
   const deliveredRes = makeRes();
   await delivered.controller.updateOrderStatus(delivered.request("Delivered"), deliveredRes);
@@ -109,26 +109,34 @@ test("updateOrderStatus sets deliveredAt and clears stale evidence on reversal",
   assert.deepEqual(delivered.call.update[1][0].$set.deliveredAt, {
     $ifNull: ["$deliveredAt", delivered.call.update[1][0].$set.deliveredAt.$ifNull[1]],
   });
+});
 
-  const reversal = loadController("Delivered");
-  const reversalRes = makeRes();
-  await reversal.controller.updateOrderStatus(reversal.request("Pending"), reversalRes);
-  assert.equal(reversalRes.statusCode, 200);
-  const pipeline = reversal.call.update[1];
-  assert.equal(pipeline[0].$set.status, "Pending");
-  assert.ok(pipeline.some((stage) => stage.$unset === "deliveredAt"));
-  assert.ok(pipeline.some((stage) => stage.$unset === "readyAt"));
-  assert.ok(pipeline.every((stage) => Object.keys(stage).length === 1));
-  assert.equal(reversal.call.update[2].updatePipeline, true);
+test("updateOrderStatus treats Delivered as terminal", async () => {
+  for (const nextStatus of ["Pending", "Preparing", "Ready"]) {
+    const { controller, call, request } = loadController("Delivered");
+    const res = makeRes();
 
-  const reopen = loadController("Delivered");
-  const reopenRes = makeRes();
-  await reopen.controller.updateOrderStatus(reopen.request("Ready"), reopenRes);
-  assert.equal(reopenRes.statusCode, 200);
-  const reopenPipeline = reopen.call.update[1];
-  assert.ok(reopenPipeline[0].$set.readyAt instanceof Date);
-  assert.ok(!reopenPipeline.some((stage) => stage.$unset === "readyAt"));
-  assert.ok(reopenPipeline.some((stage) => stage.$unset === "deliveredAt"));
+    await controller.updateOrderStatus(request(nextStatus), res);
+
+    assert.equal(res.statusCode, 409);
+    assert.equal(res.body.success, false);
+    assert.match(res.body.message, /already been delivered/i);
+    assert.equal(call.update, null, `must not write when reverting to ${nextStatus}`);
+    assert.deepEqual(call.emits, [], `must not broadcast when reverting to ${nextStatus}`);
+  }
+});
+
+test("updateOrderStatus treats a repeated Delivered request as a no-op", async () => {
+  const { controller, call, request } = loadController("Delivered");
+  const res = makeRes();
+
+  await controller.updateOrderStatus(request("Delivered"), res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.success, true);
+  assert.match(res.body.message, /already been delivered/i);
+  assert.equal(call.update, null);
+  assert.deepEqual(call.emits, []);
 });
 
 test("updateOrderStatus converts write failures into a safe 500", async () => {
@@ -200,24 +208,6 @@ test("updateOrderStatus does not invent a deadline without readyAt", async () =>
   assert.equal($set.etaMinutesUsed, null);
   assert.equal($set.readyAtUsed, null);
   assert.equal($set.deliveredBy, null);
-});
-
-test("updateOrderStatus unsets all delivery evidence on reversal", async () => {
-  const { controller, call, request } = loadController("Delivered");
-  const res = makeRes();
-
-  await controller.updateOrderStatus(request("Pending"), res);
-
-  assert.equal(res.statusCode, 200);
-  const pipeline = call.update[1];
-  const unsetFields = pipeline
-    .filter((stage) => Object.prototype.hasOwnProperty.call(stage, "$unset"))
-    .map((stage) => stage.$unset);
-  for (const field of ["deliveredAt", ...EVIDENCE_FIELDS]) {
-    assert.ok(unsetFields.includes(field), `must unset ${field}`);
-  }
-  assert.ok(pipeline.every((stage) => Object.keys(stage).length === 1));
-  assert.equal(call.update[2].updatePipeline, true);
 });
 
 test("updateOrderStatus broadcasts delivery evidence in the socket payload", async () => {
