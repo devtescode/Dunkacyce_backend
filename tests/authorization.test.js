@@ -597,7 +597,11 @@ test("activateSuperAdmin validates config/key/uniqueness, promotes to superadmin
     "activation must NOT change tokenVersion"
   );
   assert.equal(res.body.tokenVersion, 2);
-  assert.ok(FakeAdmin.__schemaReadyCalls >= 1);
+  assert.equal(
+    FakeAdmin.__schemaReadyCalls,
+    0,
+    "schema/index setup runs once at startup, not on every activation attempt"
+  );
 
   // A second activation is rejected even for the now-superadmin row.
   res = makeRes();

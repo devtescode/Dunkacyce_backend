@@ -118,6 +118,13 @@ exports.getUserReceipts = async (req, res) => {
         createdAt: o.createdAt,
         paidAt: o.paidAt,
         userId: o.userId,
+        // Durable delivery evidence kept for the user's records.
+        etaDeadlineAt: o.etaDeadlineAt ?? null,
+        deliveredBeforeDeadline: o.deliveredBeforeDeadline ?? null,
+        lateByMs: o.lateByMs ?? null,
+        etaMinutesUsed: o.etaMinutesUsed ?? null,
+        readyAtUsed: o.readyAtUsed ?? null,
+        deliveredBy: o.deliveredBy ?? null,
       })),
     });
   } catch (err) {
@@ -172,15 +179,73 @@ module.exports.updateOrderStatus = async (req, res) => {
     }
     if (status === "Delivered") {
       $set.deliveredAt = { $ifNull: ["$deliveredAt", now] };
+
+      // Durable delivery evidence is computed server-side from the stored
+      // readyAt so a client cannot claim on-time delivery it did not earn.
+      const eta = Number(existingOrder.etaMinutes) || 8;
+      const storedReadyAt = existingOrder.readyAt
+        ? new Date(existingOrder.readyAt)
+        : null;
+      const deliveredBy = req.admin?.id ? String(req.admin.id) : null;
+
+      if (storedReadyAt && !Number.isNaN(storedReadyAt.getTime())) {
+        const deadlineMs = storedReadyAt.getTime() + eta * 60000;
+        const nowMs = now.getTime();
+        $set.etaDeadlineAt = new Date(deadlineMs);
+        $set.deliveredBeforeDeadline = nowMs <= deadlineMs;
+        $set.lateByMs = Math.max(0, nowMs - deadlineMs);
+        $set.etaMinutesUsed = eta;
+        $set.readyAtUsed = storedReadyAt;
+        $set.deliveredBy = deliveredBy;
+      } else {
+        // No trustworthy readyAt: never invent a deadline or a lateness value.
+        $set.etaDeadlineAt = null;
+        $set.deliveredBeforeDeadline = null;
+        $set.lateByMs = 0;
+        $set.etaMinutesUsed = null;
+        $set.readyAtUsed = null;
+        $set.deliveredBy = null;
+      }
     }
 
-    const update = { $set };
-    // A reversal invalidates the old delivery evidence.
+    // Build a valid aggregation pipeline: each stage holds exactly one operator.
+    // The legacy { $unset: { field: "" } } shape is invalid inside a pipeline;
+    // $unset there takes the field name directly.
+    const pipeline = [{ $set }];
     if (status !== "Delivered" && previousStatus === "Delivered") {
-      update.$unset = { deliveredAt: "" };
+      // A reversal invalidates the old delivery evidence. Each field gets its
+      // own stage to preserve the one-operator-per-stage pipeline rule.
+      pipeline.push({ $unset: "deliveredAt" });
+      pipeline.push({ $unset: "etaDeadlineAt" });
+      pipeline.push({ $unset: "deliveredBeforeDeadline" });
+      pipeline.push({ $unset: "lateByMs" });
+      pipeline.push({ $unset: "etaMinutesUsed" });
+      pipeline.push({ $unset: "readyAtUsed" });
+      pipeline.push({ $unset: "deliveredBy" });
+      // Re-opening to Pending/Preparing also invalidates the old arrival window,
+      // so the next Ready stamps a fresh readyAt instead of reusing a stale one.
+      // (Delivered -> Ready keeps its freshly stamped readyAt from $set above.)
+      if (status === "Pending" || status === "Preparing") {
+        pipeline.push({ $unset: "readyAt" });
+      }
     }
 
-    const updated = await Order.findByIdAndUpdate(id, [update], { new: true });
+    let updated;
+    try {
+      // Mongoose only accepts an aggregation pipeline when `updatePipeline` is
+      // explicitly enabled; otherwise it treats the array as a legacy update
+      // document and throws "Cannot pass an array to query updates".
+      updated = await Order.findByIdAndUpdate(id, pipeline, {
+        new: true,
+        updatePipeline: true,
+      });
+    } catch (writeError) {
+      console.error("ORDER STATUS WRITE ERROR:", writeError);
+      return res.status(500).json({
+        success: false,
+        message: "We couldn't update the order status right now. Please try again.",
+      });
+    }
 
     if (!updated) {
       return res.status(404).json({
@@ -235,7 +300,7 @@ module.exports.updateOrderStatus = async (req, res) => {
     console.error("UPDATE ORDER STATUS ERROR:", err);
     return res.status(500).json({
       success: false,
-      message: err.message,
+      message: "Something went wrong while updating the order status. Please try again.",
     });
   }
 };

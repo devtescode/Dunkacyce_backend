@@ -68,6 +68,14 @@ const orderSchema = new mongoose.Schema(
     deliveredAt: { type: Date, default: null },
     etaMinutes: { type: Number, default: 8, min: 1 },
 
+    // 🆕 DURABLE DELIVERY EVIDENCE (server-computed on Delivered)
+    etaDeadlineAt: { type: Date, default: null },
+    deliveredBeforeDeadline: { type: Boolean, default: null },
+    lateByMs: { type: Number, default: null },
+    etaMinutesUsed: { type: Number, default: null },
+    readyAtUsed: { type: Date, default: null },
+    deliveredBy: { type: String, default: null },
+
     // 🆕 OPTIONAL TRACKING
     paymentChannel: {
       type: String,

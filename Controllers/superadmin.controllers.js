@@ -124,9 +124,9 @@ module.exports.activateSuperAdmin = async (req, res) => {
       return res.status(400).json({ message: "Activation key is required" });
     }
 
-    if (typeof Admin.ensureAdminSchemaReady === "function") {
-      await Admin.ensureAdminSchemaReady();
-    }
+    // Index creation / legacy migration happens once at server startup in
+    // index.js. Re-running it here made activation fail (500) whenever the
+    // index build was slow or the DB was briefly unreachable.
 
     if (!safeEqualSecret(req.body.activationKey, activationKey)) {
       return res.status(403).json({
