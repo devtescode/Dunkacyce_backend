@@ -273,6 +273,20 @@ module.exports.updateOrderStatus = async (req, res) => {
           total: updated.total,
           items: updated.items,
           createdAt: updated.createdAt,
+          updatedAt: updated.updatedAt || null,
+          paymentStatus: updated.paymentStatus || null,
+          // Durable delivery evidence travels with every status broadcast.
+          etaDeadlineAt: updated.etaDeadlineAt || null,
+          deliveredBeforeDeadline:
+            typeof updated.deliveredBeforeDeadline === "boolean"
+              ? updated.deliveredBeforeDeadline
+              : null,
+          lateByMs: Number.isFinite(updated.lateByMs) ? updated.lateByMs : 0,
+          etaMinutesUsed: Number.isFinite(updated.etaMinutesUsed)
+            ? updated.etaMinutesUsed
+            : null,
+          readyAtUsed: updated.readyAtUsed || null,
+          deliveredBy: updated.deliveredBy || null,
         };
 
         io.to(`user:${uid}`).emit("order_status_updated", payload);

@@ -20,8 +20,9 @@ function makeRes() {
   };
 }
 
-function loadController(previousStatus, writeError = null) {
-  const call = { update: null };
+function loadController(previousStatus, writeError = null, existingOverrides = {}) {
+  const call = { update: null, emits: [] };
+  const existing = { _id: ORDER_ID, status: previousStatus, ...existingOverrides };
   const updated = {
     _id: ORDER_ID,
     status: previousStatus,
@@ -29,12 +30,26 @@ function loadController(previousStatus, writeError = null) {
   };
   const fakeOrder = {
     findById: () => ({
-      lean: async () => ({ _id: ORDER_ID, status: previousStatus }),
+      lean: async () => ({ ...existing }),
     }),
     findByIdAndUpdate: async (...args) => {
       call.update = args;
       if (writeError) throw writeError;
-      return { ...updated, status: args[1]?.[0]?.$set?.status ?? previousStatus };
+      const $set = args[1]?.[0]?.$set || {};
+      // Mirror literal $set values so the socket payload sees the evidence
+      // fields the same way a real persisted document would.
+      const echoed = {};
+      for (const [key, value] of Object.entries($set)) {
+        if (value && typeof value === "object" && "$ifNull" in value) continue;
+        echoed[key] = value;
+      }
+      return {
+        ...updated,
+        ...echoed,
+        status: $set.status ?? previousStatus,
+        paymentStatus: "Paid",
+        updatedAt: new Date(),
+      };
     },
   };
 
@@ -47,14 +62,21 @@ function loadController(previousStatus, writeError = null) {
   delete require.cache[CONTROLLER_PATH];
   const controller = require(CONTROLLER_PATH);
 
+  const io = {
+    to: () => ({
+      emit: (event, payload) => call.emits.push({ event, payload }),
+    }),
+  };
+
   return {
     controller,
     call,
-    request(status) {
+    request(status, adminId) {
       return {
         params: { id: ORDER_ID },
         body: { status },
-        app: { get: () => undefined },
+        admin: adminId === undefined ? undefined : { id: adminId },
+        app: { get: (key) => (key === "io" ? io : undefined) },
       };
     },
   };
@@ -123,4 +145,111 @@ test("updateOrderStatus converts write failures into a safe 500", async () => {
   } finally {
     console.error = originalConsoleError;
   }
+});
+
+const EVIDENCE_FIELDS = [
+  "etaDeadlineAt",
+  "deliveredBeforeDeadline",
+  "lateByMs",
+  "etaMinutesUsed",
+  "readyAtUsed",
+  "deliveredBy",
+];
+
+test("updateOrderStatus records delivery evidence in the Delivered pipeline", async () => {
+  const readyAt = new Date("2026-01-01T10:00:00.000Z");
+  const { controller, call, request } = loadController("Ready", null, {
+    readyAt,
+    etaMinutes: 5,
+  });
+  const res = makeRes();
+
+  await controller.updateOrderStatus(request("Delivered", "665f1a2b3c4d5e6f708192a5"), res);
+
+  assert.equal(res.statusCode, 200);
+  const stage = call.update[1][0];
+  const $set = stage.$set;
+  assert.equal($set.status, "Delivered");
+  assert.ok($set.etaDeadlineAt instanceof Date);
+  assert.equal($set.etaDeadlineAt.getTime(), readyAt.getTime() + 5 * 60000);
+  assert.equal(typeof $set.deliveredBeforeDeadline, "boolean");
+  assert.equal(typeof $set.lateByMs, "number");
+  assert.ok($set.lateByMs >= 0);
+  assert.equal($set.etaMinutesUsed, 5);
+  assert.ok($set.readyAtUsed instanceof Date);
+  assert.equal($set.readyAtUsed.getTime(), readyAt.getTime());
+  assert.equal($set.deliveredBy, "665f1a2b3c4d5e6f708192a5");
+  // All evidence must be written by the same $set stage.
+  assert.deepEqual(Object.keys(stage), ["$set"]);
+  for (const field of EVIDENCE_FIELDS) {
+    assert.ok(Object.prototype.hasOwnProperty.call($set, field), `must set ${field}`);
+  }
+});
+
+test("updateOrderStatus does not invent a deadline without readyAt", async () => {
+  const { controller, call, request } = loadController("Preparing");
+  const res = makeRes();
+
+  await controller.updateOrderStatus(request("Delivered"), res);
+
+  assert.equal(res.statusCode, 200);
+  const $set = call.update[1][0].$set;
+  assert.equal($set.etaDeadlineAt, null);
+  assert.equal($set.deliveredBeforeDeadline, null);
+  assert.equal($set.lateByMs, 0);
+  assert.equal($set.etaMinutesUsed, null);
+  assert.equal($set.readyAtUsed, null);
+  assert.equal($set.deliveredBy, null);
+});
+
+test("updateOrderStatus unsets all delivery evidence on reversal", async () => {
+  const { controller, call, request } = loadController("Delivered");
+  const res = makeRes();
+
+  await controller.updateOrderStatus(request("Pending"), res);
+
+  assert.equal(res.statusCode, 200);
+  const pipeline = call.update[1];
+  const unsetFields = pipeline
+    .filter((stage) => Object.prototype.hasOwnProperty.call(stage, "$unset"))
+    .map((stage) => stage.$unset);
+  for (const field of ["deliveredAt", ...EVIDENCE_FIELDS]) {
+    assert.ok(unsetFields.includes(field), `must unset ${field}`);
+  }
+  assert.ok(pipeline.every((stage) => Object.keys(stage).length === 1));
+  assert.equal(call.update[2].updatePipeline, true);
+});
+
+test("updateOrderStatus broadcasts delivery evidence in the socket payload", async () => {
+  const readyAt = new Date("2026-01-01T10:00:00.000Z");
+  const { controller, call, request } = loadController("Ready", null, {
+    readyAt,
+    etaMinutes: 3,
+  });
+  const res = makeRes();
+
+  await controller.updateOrderStatus(request("Delivered", "admin-42"), res);
+
+  assert.equal(res.statusCode, 200);
+  assert.ok(call.emits.length > 0, "socket emit must be attempted");
+  const delivered = call.emits.filter((entry) => entry.event === "order_delivered");
+  assert.equal(delivered.length, 2);
+  const payload = delivered[0].payload;
+  for (const field of [
+    ...EVIDENCE_FIELDS,
+    "updatedAt",
+    "paymentStatus",
+    "readyAt",
+    "deliveredAt",
+    "etaMinutes",
+  ]) {
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(payload, field),
+      `socket payload must include ${field}`,
+    );
+  }
+  assert.equal(payload.deliveredBy, "admin-42");
+  assert.equal(payload.etaMinutesUsed, 3);
+  assert.equal(payload.etaDeadlineAt.getTime(), readyAt.getTime() + 3 * 60000);
+  assert.equal(payload.paymentStatus, "Paid");
 });
