@@ -15,6 +15,7 @@ module.exports.adminExists = async (req, res) => {
 
     return res.json({
       exists: !!admin,
+      requiresBootstrapKey: Boolean(process.env.ADMIN_BOOTSTRAP_KEY),
     });
   } catch (err) {
     return res.status(500).json({
@@ -28,6 +29,21 @@ module.exports.adminExists = async (req, res) => {
 // =========================
 module.exports.registerAdmin = async (req, res) => {
   try {
+    // Bootstrap only: registration closes as soon as any admin exists.
+    const adminCount = await Admin.countDocuments();
+    if (adminCount !== 0) {
+      return res.status(403).json({
+        message: "Admin registration is closed",
+      });
+    }
+
+    const bootstrapKey = process.env.ADMIN_BOOTSTRAP_KEY;
+    if (bootstrapKey && req.body.bootstrapKey !== bootstrapKey) {
+      return res.status(403).json({
+        message: "Invalid bootstrap key",
+      });
+    }
+
     const { email, username, password } = req.body;
 
     if (!email || !username || !password) {
@@ -36,11 +52,15 @@ module.exports.registerAdmin = async (req, res) => {
       });
     }
 
-    const existing = await Admin.findOne({ email });
-
-    if (existing) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({
-        message: "Admin already exists",
+        message: "Invalid email format",
+      });
+    }
+
+    if (password.length < 8) {
+      return res.status(400).json({
+        message: "Password must be at least 8 characters long",
       });
     }
 
@@ -48,13 +68,21 @@ module.exports.registerAdmin = async (req, res) => {
       email,
       username,
       password,
+      role: "admin", // never trust a role supplied by the client
     });
 
     return res.status(201).json({
       message: "Admin created successfully",
       admin,
+      role: "admin",
     });
   } catch (err) {
+    if (err && err.code === 11000) {
+      return res.status(409).json({
+        message: "Admin already exists",
+      });
+    }
+
     return res.status(500).json({
       message: "Server error",
     });
@@ -90,20 +118,42 @@ module.exports.loginAdmin = async (req, res) => {
       });
     }
 
+    if (admin.status === "blocked") {
+      return res.status(403).json({
+        message: "Admin account is blocked",
+      });
+    }
+
+    if (admin.isActive === false || admin.status === "inactive") {
+      return res.status(403).json({
+        message: "Admin account is inactive",
+      });
+    }
+
+    const role = admin.role || "admin";
     const token = jwt.sign(
       {
-        id: admin._id,
-        role: "admin",
+        id: String(admin._id),
+        role,
         email: admin.email,
+        version: admin.tokenVersion || 0,
       },
       process.env.ADMIN_JWT_SECRET,
       { expiresIn: "1hr" }
     );
 
+    // toJSON strips the password; explicitly keep role/status for the UI.
+    const adminResponse = admin.toJSON ? admin.toJSON() : { ...admin._doc };
+    delete adminResponse.password;
+    adminResponse.role = role;
+    adminResponse.status = admin.status || "active";
+
     return res.json({
       message: "Login successful",
       token,
-      admin,
+      admin: adminResponse,
+      role,
+      isSuperAdmin: admin.role === "superadmin" || admin.role === "super_admin",
     });
   } catch (err) {
     return res.status(500).json({

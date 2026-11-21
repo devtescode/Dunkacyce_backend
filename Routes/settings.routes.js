@@ -5,6 +5,7 @@ const {
   toggleRushHour,
   getRushHour,
 } = require("../Controllers/settings.controller");
+const { verifyAdmin } = require("../middleware/adminAuth");
 
 // GET real value
 // router.get("/rush-hour", (req, res) => {
@@ -19,6 +20,6 @@ const {
 router.get("/rush-hour", getRushHour);
 
 // TOGGLE
-router.patch("/rush-hour", toggleRushHour);
+router.patch("/rush-hour", verifyAdmin, toggleRushHour);
 
 module.exports = router;

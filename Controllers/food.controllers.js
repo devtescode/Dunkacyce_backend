@@ -54,6 +54,17 @@ const parseSwallowQuantityInput = (raw) => {
   return { provided: true, value: qty };
 };
 
+const unwrapError = (err) => err?.error ?? err;
+
+const uploadFailureMessage = (err) => {
+  const detail = unwrapError(err);
+  const timedOut = detail?.name === "TimeoutError" || detail?.http_code === 499;
+  if (timedOut) {
+    return "Image upload timed out. Please try a smaller image or try again.";
+  }
+  return detail?.message || "Server error";
+};
+
 /* ================= GET FOODS ================= */
 module.exports.getFoods = async (req, res) => {
   try {
@@ -128,14 +139,7 @@ module.exports.addFood = async (req, res) => {
     let imageUrl = bodyImageUrl;
 
     if (req.file) {
-      const fileString = `data:${req.file.mimetype};base64,${req.file.buffer.toString(
-        "base64"
-      )}`;
-
-      const uploadResult = await cloudinary.uploader.upload(fileString, {
-        folder: "foods",
-      });
-
+      const uploadResult = await cloudinary.uploadBuffer(req.file.buffer, "foods");
       imageUrl = uploadResult.secure_url;
     }
 
@@ -166,8 +170,9 @@ module.exports.addFood = async (req, res) => {
       food,
     });
   } catch (err) {
-    console.error("ADD FOOD ERROR:", err);
-    return res.status(500).json({ message: err.message || "Server error" });
+    const detail = unwrapError(err);
+    console.error("ADD FOOD ERROR:", detail);
+    return res.status(500).json({ message: uploadFailureMessage(err) });
   }
 };
 
@@ -178,7 +183,15 @@ module.exports.updateFood = async (req, res) => {
     if (!existingFood)
       return res.status(404).json({ message: "Food not found" });
 
+    if (req.body.replaceImage === "true" && !req.file) {
+      return res.status(400).json({
+        message: "Image upload failed. Please try again with a smaller image.",
+      });
+    }
+
     const updates = { ...req.body };
+    delete updates.replaceImage;
+    delete updates.availableSoupsJson;
 
     if (updates.name !== undefined) {
       if (typeof updates.name !== "string" || !updates.name.trim()) {
@@ -220,14 +233,7 @@ module.exports.updateFood = async (req, res) => {
     }
 
     if (req.file) {
-      const fileString = `data:${req.file.mimetype};base64,${req.file.buffer.toString(
-        "base64"
-      )}`;
-
-      const uploadResult = await cloudinary.uploader.upload(fileString, {
-        folder: "foods",
-      });
-
+      const uploadResult = await cloudinary.uploadBuffer(req.file.buffer, "foods");
       updates.imageUrl = uploadResult.secure_url;
     }
 
@@ -286,8 +292,12 @@ module.exports.updateFood = async (req, res) => {
       food,
     });
   } catch (err) {
-    console.error("UPDATE FOOD ERROR:", err);
-    return res.status(500).json({ message: err.message || "Server error" });
+    const detail = unwrapError(err);
+    console.error("UPDATE FOOD ERROR:", detail);
+    const timedOut = detail?.name === "TimeoutError" || detail?.http_code === 499;
+    return res.status(timedOut ? 504 : 500).json({
+      message: uploadFailureMessage(err),
+    });
   }
 };
 

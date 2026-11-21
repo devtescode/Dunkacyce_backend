@@ -7,12 +7,16 @@ const cors = require("cors");
 const { Server } = require("socket.io");
 const jwt = require("jsonwebtoken");
 
+// models
+const Admin = require("./Models/admin.model");
+
 // routes
 const userRoutes = require("./Routes/user.routes");
 const adminRoutes = require("./Routes/user.adminRoutes");
 const foodRoutes = require("./Routes/food.routes");
 const cartRoutes = require("./Routes/cart.routes");
 const settingRoutes = require("./Routes/settings.routes");
+const superadminRoutes = require("./Routes/superadmin.routes");
 const paystackroute = require("./Controllers/paystackWebhook");
 
 const app = express();
@@ -37,7 +41,7 @@ const io = new Server(server, {
 
 app.set("io", io);
 
-io.use((socket, next) => {
+io.use(async (socket, next) => {
   try {
     const authToken = socket.handshake.auth?.token;
     const header = socket.handshake.headers?.authorization;
@@ -51,13 +55,32 @@ io.use((socket, next) => {
       return next();
     }
 
-    // Try admin auth first
+    // Try admin auth first. A valid signature alone is not enough: the admin
+    // must still exist, be active, and the token version must still match.
     try {
       const decoded = jwt.verify(token, process.env.ADMIN_JWT_SECRET);
-      socket.data.user = decoded;
-      socket.data.role = "admin";
-      socket.join("admins");
-      return next();
+      const tokenRole = decoded?.role;
+
+      if (tokenRole === "admin" || tokenRole === "superadmin") {
+        const adminDoc = await Admin.findById(decoded.id).select(
+          "role status isActive tokenVersion"
+        );
+
+        const dbRole = adminDoc?.role;
+        const isAdminRole = dbRole === "admin" || dbRole === "superadmin";
+        const isActive =
+          adminDoc?.status === "active" && adminDoc?.isActive !== false;
+        const versionMatches =
+          (decoded.version ?? 0) === (adminDoc?.tokenVersion ?? 0);
+
+        if (isAdminRole && isActive && versionMatches) {
+          socket.data.user = decoded;
+          socket.data.role = dbRole;
+          socket.join("admins");
+          return next();
+        }
+      }
+      // Invalid/stale/blocked admin session; fall through to user token below.
     } catch (_) {
       // Not a valid admin token; try user token below.
     }
@@ -138,6 +161,7 @@ app.use("/orders", require("./Routes/order.routes"));
 app.use("/settings", settingRoutes);
 app.use("/admin", adminRoutes);
 app.use("/dunnkayce", userRoutes);
+app.use("/api/superadmin", superadminRoutes);
 
 /* ================= HOME ================= */
 app.get("/", (req, res) => {
@@ -147,7 +171,12 @@ app.get("/", (req, res) => {
 /* ================= DB ================= */
 mongoose
   .connect(URI)
-  .then(() => console.log("✅ Database connected"))
+  .then(() => {
+    console.log("✅ Database connected");
+    require("./Models/admin.model")
+      .ensureAdminSchemaReady()
+      .catch((err) => console.error("Admin schema init error:", err.message));
+  })
   .catch((err) => console.error("❌ DB error:", err));
 
 /* ================= ERROR HANDLER ================= */

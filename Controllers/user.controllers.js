@@ -252,14 +252,7 @@ module.exports.updateProfile = async (req, res) => {
     }
 
     if (req.file) {
-      const fileString = `data:${req.file.mimetype};base64,${req.file.buffer.toString(
-        "base64"
-      )}`;
-
-      const uploadResult = await cloudinary.uploader.upload(fileString, {
-        folder: "profiles",
-      });
-
+      const uploadResult = await cloudinary.uploadBuffer(req.file.buffer, "profiles");
       user.profilePicture = uploadResult.secure_url;
     }
 
@@ -272,7 +265,13 @@ module.exports.updateProfile = async (req, res) => {
       user: updatedUser,
     });
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: "Server error" });
+    const detail = error?.error ?? error;
+    console.error("UPDATE PROFILE ERROR:", detail);
+    const timedOut = detail?.name === "TimeoutError" || detail?.http_code === 499;
+    return res.status(timedOut ? 504 : 500).json({
+      message: timedOut
+        ? "Image upload timed out. Please try a smaller image or try again."
+        : detail?.message || "Server error",
+    });
   }
 };

@@ -1,6 +1,5 @@
 const Order = require("../Models/models/order.model");
 const crypto = require("crypto");
-const jwt = require("jsonwebtoken");
 
 // GET USER PAID ORDERS
 const mongoose = require("mongoose");
@@ -132,24 +131,6 @@ exports.getUserReceipts = async (req, res) => {
 
 module.exports.updateOrderStatus = async (req, res) => {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res.status(401).json({
-        success: false,
-        message: "Missing or invalid authorization token",
-      });
-    }
-
-    const token = authHeader.split(" ")[1];
-    try {
-      jwt.verify(token, process.env.ADMIN_JWT_SECRET);
-    } catch (err) {
-      return res.status(403).json({
-        success: false,
-        message: "Invalid or expired admin token",
-      });
-    }
-
     const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({
@@ -167,22 +148,77 @@ module.exports.updateOrderStatus = async (req, res) => {
       });
     }
 
-    const order = await Order.findByIdAndUpdate(
-      id,
-      { status },
-      { new: true, runValidators: true }
-    );
+    // 🔍 LOAD EXISTING ORDER FIRST (need previousStatus + userId)
+    const existingOrder = await Order.findById(id).lean();
 
-    if (!order) {
+    if (!existingOrder) {
       return res.status(404).json({
         success: false,
         message: "Order not found",
       });
     }
 
+    const previousStatus = existingOrder.status;
+
+    // 🧱 BUILD $set — NEVER OVERWRITE EXISTING EVIDENCE TIMESTAMPS
+    const $set = { status };
+    if (status === "Ready" && !existingOrder.readyAt) {
+      $set.readyAt = new Date();
+    }
+    if (status === "Delivered" && !existingOrder.deliveredAt) {
+      $set.deliveredAt = new Date();
+    }
+
+    const updated = await Order.findByIdAndUpdate(
+      id,
+      { $set },
+      { new: true, runValidators: true }
+    );
+
+    if (!updated) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    // 🔔 REAL-TIME ORDER STATUS BROADCAST (only after DB write succeeds)
+    const io = req.app.get("io");
+    if (io) {
+      const uid = updated.userId?._id ?? updated.userId;
+      const payload = {
+        orderId: String(updated._id),
+        userId: String(uid),
+        status: updated.status,
+        previousStatus,
+        readyAt: updated.readyAt || null,
+        deliveredAt: updated.deliveredAt || null,
+        etaMinutes: Number(updated.etaMinutes) || 8,
+        reference: updated.reference,
+        hostel: updated.hostel,
+        room: updated.room,
+        total: updated.total,
+        items: updated.items,
+        createdAt: updated.createdAt,
+      };
+
+      io.to(`user:${uid}`).emit("order_status_updated", payload);
+      io.to("admins").emit("order_status_updated", payload);
+
+      if (status === "Ready") {
+        io.to(`user:${uid}`).emit("order_ready", payload);
+        io.to("admins").emit("order_ready", payload);
+      }
+
+      if (status === "Delivered") {
+        io.to(`user:${uid}`).emit("order_delivered", payload);
+        io.to("admins").emit("order_delivered", payload);
+      }
+    }
+
     return res.status(200).json({
       success: true,
-      order,
+      order: updated,
     });
   } catch (err) {
     console.error("UPDATE ORDER STATUS ERROR:", err);

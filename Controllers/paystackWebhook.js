@@ -258,6 +258,25 @@ router.post("/webhook", async (req, res) => {
 
                         io.to("admins").emit("payment_confirmed", payload);
                         console.log("🔔 Admin payment alert emitted:", order.reference);
+
+                        // 🔔 REAL-TIME ORDER STATUS UPDATE (student room)
+                        const statusPayload = {
+                            orderId: String(order._id),
+                            userId: String(order.userId),
+                            status: "Preparing",
+                            previousStatus: "Pending",
+                            readyAt: null,
+                            deliveredAt: null,
+                            etaMinutes: Number(order.etaMinutes) || 8,
+                            reference: order.reference,
+                            hostel: order.hostel,
+                            room: order.room,
+                            total: order.total,
+                            items: order.items,
+                            createdAt: order.createdAt,
+                        };
+
+                        io.to(`user:${String(order.userId)}`).emit("order_status_updated", statusPayload);
                     }
                 }
             } else {

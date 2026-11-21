@@ -63,6 +63,11 @@ const orderSchema = new mongoose.Schema(
 
     paidAt: { type: Date },
 
+    // 🆕 READINESS / DELIVERY TRACKING
+    readyAt: { type: Date, default: null },
+    deliveredAt: { type: Date, default: null },
+    etaMinutes: { type: Number, default: 8, min: 1 },
+
     // 🆕 OPTIONAL TRACKING
     paymentChannel: {
       type: String,
