@@ -1,11 +1,13 @@
 const express = require("express");
 const crypto = require("crypto");
+const mongoose = require("mongoose");
 const router = express.Router();
 
 const PaymentDB = require("../Models/webhookModel");
 const Order = require("../Models/models/order.model");
 const User = require("../Models/user.models");
 const Cart = require("../Models/models/cart.model"); // ✅ IMPORTANT ADD
+const Food = require("../Models/models/food.model");
 
 require("dotenv").config();
 
@@ -115,56 +117,99 @@ router.post("/webhook", async (req, res) => {
 
         try {
 
+            let shouldCreditBalance = true;
+
             // =========================
             // 🧾 UPDATE ORDER
             // =========================
             const order = await Order.findOne({ reference });
 
             if (order) {
-                order.paymentStatus = "Paid";
-                order.amountPaid = amountInNGN;
-                order.paymentChannel = channel;
-                order.paidAt = new Date(paidAt || Date.now());
-                order.status = "Preparing";
-
-                await order.save();
-
-                console.log("✅ Order updated to PAID");
-
-                // =========================
-                // 🛒 CLEAR CART AFTER PAYMENT
-                // =========================
-                await Cart.deleteMany({
-                    userId: order.userId,
-                });
-
-                console.log("🛒 Cart cleared after payment");
-
-                // =========================
-                // 🔔 REAL-TIME ADMIN ALERT
-                // =========================
-                const io = req.app.get("io");
-                if (io) {
-                    let student = null;
-                    try {
-                        const populatedOrder = await Order.findById(order._id).populate("userId", "fullName email phone");
-                        const u = populatedOrder?.userId;
-                        if (u && typeof u === "object") {
-                            student = {
-                                _id: u._id,
-                                fullName: u.fullName || null,
-                                email: u.email || null,
-                                phone: u.phone || null,
-                            };
-                        }
-                    } catch (populateErr) {
-                        console.warn("⚠️ Could not populate student for payment alert:", populateErr.message);
+                if (order.paymentStatus === "Paid" || order.stockDecremented) {
+                    // Extra safety guard: avoid double-processing side effects.
+                    shouldCreditBalance = false;
+                    console.log("⚠️ Order already paid/stock decremented, skipping confirmation side effects:", reference);
+                } else {
+                    // =========================
+                    // 📦 DECREMENT SWALLOW STOCK (IDEMPOTENT GUARD VIA stockDecremented)
+                    // =========================
+                    const swallowQtyByFoodId = new Map();
+                    for (const item of (order.items || [])) {
+                        const foodId = item?.foodId != null ? String(item.foodId) : null;
+                        const qty = Number(item?.qty ?? item?.quantity ?? 0);
+                        if (!foodId || !Number.isFinite(qty) || qty <= 0) continue;
+                        swallowQtyByFoodId.set(foodId, (swallowQtyByFoodId.get(foodId) || 0) + qty);
                     }
 
-                    if (!student) {
+                    const decrementedStocks = [];
+                    try {
+                        for (const [foodId, qty] of swallowQtyByFoodId.entries()) {
+                            if (!mongoose.Types.ObjectId.isValid(foodId)) {
+                                console.warn("⚠️ Invalid swallow foodId in order, skipping stock decrement:", foodId, reference);
+                                continue;
+                            }
+
+                            const decremented = await Food.findOneAndUpdate(
+                                { _id: foodId, isSwallow: true, category: "Foods", swallowQuantity: { $gte: qty } },
+                                { $inc: { swallowQuantity: -qty } },
+                                { new: true }
+                            );
+
+                            if (decremented) {
+                                decrementedStocks.push({ foodId, qty });
+                            } else {
+                                // Insufficient stock or not a swallow food; clamp swallow stock to 0 safely.
+                                await Food.updateOne(
+                                    { _id: foodId, isSwallow: true, category: "Foods" },
+                                    { $set: { swallowQuantity: 0 } }
+                                );
+                            }
+                        }
+                    } catch (stockError) {
+                        // Best-effort reversal so PaymentDB claim rollback can safely retry.
+                        for (const entry of decrementedStocks.reverse()) {
+                            try {
+                                await Food.updateOne(
+                                    { _id: entry.foodId, isSwallow: true, category: "Foods" },
+                                    { $inc: { swallowQuantity: entry.qty } }
+                                );
+                            } catch (revertError) {
+                                console.error("⚠️ Failed to revert swallow stock decrement:", entry.foodId, reference, revertError);
+                            }
+                        }
+                        throw stockError;
+                    }
+
+                    order.paymentStatus = "Paid";
+                    order.amountPaid = amountInNGN;
+                    order.paymentChannel = channel;
+                    order.paidAt = new Date(paidAt || Date.now());
+                    order.status = "Preparing";
+                    order.stockDecremented = true;
+
+                    await order.save();
+
+                    console.log("✅ Order updated to PAID");
+
+                    // =========================
+                    // 🛒 CLEAR CART AFTER PAYMENT
+                    // =========================
+                    await Cart.deleteMany({
+                        userId: order.userId,
+                    });
+
+                    console.log("🛒 Cart cleared after payment");
+
+                    // =========================
+                    // 🔔 REAL-TIME ADMIN ALERT
+                    // =========================
+                    const io = req.app.get("io");
+                    if (io) {
+                        let student = null;
                         try {
-                            const u = await User.findById(order.userId).select("fullName email phone");
-                            if (u) {
+                            const populatedOrder = await Order.findById(order._id).populate("userId", "fullName email phone");
+                            const u = populatedOrder?.userId;
+                            if (u && typeof u === "object") {
                                 student = {
                                     _id: u._id,
                                     fullName: u.fullName || null,
@@ -172,32 +217,48 @@ router.post("/webhook", async (req, res) => {
                                     phone: u.phone || null,
                                 };
                             }
-                        } catch (userErr) {
-                            console.warn("⚠️ Could not load student for payment alert:", userErr.message);
+                        } catch (populateErr) {
+                            console.warn("⚠️ Could not populate student for payment alert:", populateErr.message);
                         }
+
+                        if (!student) {
+                            try {
+                                const u = await User.findById(order.userId).select("fullName email phone");
+                                if (u) {
+                                    student = {
+                                        _id: u._id,
+                                        fullName: u.fullName || null,
+                                        email: u.email || null,
+                                        phone: u.phone || null,
+                                    };
+                                }
+                            } catch (userErr) {
+                                console.warn("⚠️ Could not load student for payment alert:", userErr.message);
+                            }
+                        }
+
+                        const payload = {
+                            orderId: order._id,
+                            reference: order.reference,
+                            amountPaid: order.amountPaid,
+                            total: order.total,
+                            paidAt: order.paidAt,
+                            paymentChannel: order.paymentChannel,
+                            paymentStatus: order.paymentStatus,
+                            status: order.status,
+                            fulfillmentStatus: order.status,
+                            hostel: order.hostel,
+                            room: order.room,
+                            userId: order.userId,
+                            student,
+                            items: order.items,
+                            itemCount: Array.isArray(order.items) ? order.items.length : 0,
+                            createdAt: order.createdAt,
+                        };
+
+                        io.to("admins").emit("payment_confirmed", payload);
+                        console.log("🔔 Admin payment alert emitted:", order.reference);
                     }
-
-                    const payload = {
-                        orderId: order._id,
-                        reference: order.reference,
-                        amountPaid: order.amountPaid,
-                        total: order.total,
-                        paidAt: order.paidAt,
-                        paymentChannel: order.paymentChannel,
-                        paymentStatus: order.paymentStatus,
-                        status: order.status,
-                        fulfillmentStatus: order.status,
-                        hostel: order.hostel,
-                        room: order.room,
-                        userId: order.userId,
-                        student,
-                        items: order.items,
-                        itemCount: Array.isArray(order.items) ? order.items.length : 0,
-                        createdAt: order.createdAt,
-                    };
-
-                    io.to("admins").emit("payment_confirmed", payload);
-                    console.log("🔔 Admin payment alert emitted:", order.reference);
                 }
             } else {
                 console.log("⚠️ Order not found for reference:", reference);
@@ -206,20 +267,24 @@ router.post("/webhook", async (req, res) => {
             // =========================
             // 👤 UPDATE USER BALANCE
             // =========================
-            const user = await User.findOne({
-                email: email.toLowerCase().trim(),
-            });
+            if (shouldCreditBalance) {
+                const user = await User.findOne({
+                    email: email.toLowerCase().trim(),
+                });
 
-            if (user) {
-                user.balance = (user.balance || 0) + amountInNGN;
-                await user.save();
+                if (user) {
+                    user.balance = (user.balance || 0) + amountInNGN;
+                    await user.save();
 
-                console.log("👤 User balance updated:", user.email);
+                    console.log("👤 User balance updated:", user.email);
+                } else {
+                    console.warn("⚠️ User not found:", email);
+                }
             } else {
-                console.warn("⚠️ User not found:", email);
+                console.log("⚠️ Skipping balance credit for already processed order:", reference);
             }
 
-                    return res.status(200).send("OK");
+            return res.status(200).send("OK");
         } catch (processingError) {
             console.error("Webhook post-payment processing failed, rolling back payment claim:", reference, processingError);
             try {

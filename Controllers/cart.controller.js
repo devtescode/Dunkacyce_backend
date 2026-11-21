@@ -17,6 +17,10 @@ module.exports.addToCart = async (req, res) => {
       });
     }
 
+    const normalizedSoup =
+      typeof soup === "string" ? soup.trim() : (soup ?? null);
+    const cartSoup = normalizedSoup === "" ? null : normalizedSoup;
+
     // ✅ correct collection now
     const food = await Food.findById(foodId);
 
@@ -30,6 +34,7 @@ module.exports.addToCart = async (req, res) => {
     const existingCartItem = await Cart.findOne({
       userId: req.user.id,
       foodId,
+      soup: cartSoup,
     });
 
     if (existingCartItem) {
@@ -53,7 +58,7 @@ module.exports.addToCart = async (req, res) => {
       status: food.status,
 
       quantity: quantity || 1,
-      soup, 
+      soup: cartSoup,
     });
     console.log(Cart, "adddddddddddddddd to cartttttttttttttttttttttt");
 

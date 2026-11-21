@@ -152,8 +152,33 @@ mongoose
 
 /* ================= ERROR HANDLER ================= */
 app.use((err, req, res, next) => {
-  console.error(err.message);
-  res.status(500).json({ message: "Internal Server Error" });
+  const isMulterError =
+    err?.name === "MulterError" ||
+    (typeof err?.code === "string" && err.code.startsWith("LIMIT_"));
+
+  if (isMulterError) {
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res
+        .status(400)
+        .json({ message: "Image too large. Maximum size is 5MB" });
+    }
+
+    return res
+      .status(400)
+      .json({ message: err.message || "Invalid upload" });
+  }
+
+  if (
+    typeof err?.message === "string" &&
+    err.message.includes("Invalid file type")
+  ) {
+    return res.status(400).json({ message: err.message });
+  }
+
+  console.error(err);
+  return res
+    .status(500)
+    .json({ message: err.message || "Internal Server Error" });
 });
 
 /* ================= START SERVER ================= */

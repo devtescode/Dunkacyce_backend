@@ -9,7 +9,8 @@ const foodSchema = new mongoose.Schema(
     imageUrl: { type: String, required: true },
     status: { type: String, enum: ["Available", "Not available", "Preparing"], default: "Available" },
     isSwallow: { type: Boolean, default: false },
-    dailyLimit: { type: Number, default: 10 },
+    availableSoups: { type: [String], default: [] },
+    swallowQuantity: { type: Number, default: 0, min: 0 },
   },
   { timestamps: true }
 );

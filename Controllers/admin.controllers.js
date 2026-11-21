@@ -4,6 +4,7 @@ const jwt = require("jsonwebtoken");
 
 const User = require("../Models/user.models");
 const Order = require("../Models/models/order.model");
+const Food = require("../Models/models/food.model");
 
 // =========================
 // CHECK IF ADMIN EXISTS
@@ -136,6 +137,7 @@ module.exports.dashboardstats = async (req, res) => {
       paidOrdersThisWeek,
       paidStudentIds,
       studentsToDeliveryIds,
+      lowStockSwallows,
     ] = await Promise.all([
       User.countDocuments(),
       Order.countDocuments(),
@@ -147,6 +149,12 @@ module.exports.dashboardstats = async (req, res) => {
       Order.distinct("userId", paidFilter),
       // Distinct students/users with at least one paid, not-yet-delivered order
       Order.distinct("userId", toDeliveryFilter),
+      Food.find({ isSwallow: true, swallowQuantity: { $lt: 10 } })
+        .select(
+          "_id name swallowQuantity availableSoups status imageUrl category isSwallow"
+        )
+        .sort({ swallowQuantity: 1, name: 1 })
+        .lean(),
     ]);
 
     // -----------------------
@@ -164,6 +172,9 @@ module.exports.dashboardstats = async (req, res) => {
     const studentsToDelivery = Array.isArray(studentsToDeliveryIds)
       ? studentsToDeliveryIds.length
       : 0;
+    const lowStockSwallowCount = Array.isArray(lowStockSwallows)
+      ? lowStockSwallows.length
+      : 0;
 
     res.json({
       totalStudents,
@@ -171,6 +182,8 @@ module.exports.dashboardstats = async (req, res) => {
       weeklyRevenue,
       paidStudents,
       studentsToDelivery,
+      lowStockSwallowCount,
+      lowStockSwallows: Array.isArray(lowStockSwallows) ? lowStockSwallows : [],
     });
   } catch (err) {
     console.error("Dashboard stats error:", err);
