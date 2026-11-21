@@ -3,9 +3,9 @@ const {
   getAllOrders,
   create,
   getUserReceipts,
+  updateOrderStatus,
   // getMyOrders,
   // createOrder,
-  // updateOrderStatus,
   // updatePaymentStatus,
 } = require("../Controllers/order.controllers");
 const router = express.Router();
@@ -15,7 +15,7 @@ router.post("/create", create);
 router.get("/user/:id/receipts", getUserReceipts);
 // router.get("/user/:userId", getMyOrders);
 // router.post("/", createOrder);
-// router.put("/:id/status", updateOrderStatus);
+router.put("/:id/status", updateOrderStatus);
 // router.put("/:id/payment", updatePaymentStatus);
 
 module.exports = router;

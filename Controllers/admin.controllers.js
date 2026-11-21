@@ -124,34 +124,53 @@ module.exports.dashboardstats = async (req, res) => {
     const endOfWeek = new Date();
     endOfWeek.setHours(23, 59, 59, 999);
 
-    // -----------------------
-    // TOTAL USERS
-    // -----------------------
-    const totalStudents = await User.countDocuments();
+    const paidFilter = { paymentStatus: "Paid" };
+    const toDeliveryFilter = {
+      paymentStatus: "Paid",
+      status: { $ne: "Delivered" },
+    };
 
-    // -----------------------
-    // TOTAL ORDERS
-    // -----------------------
-    const totalOrders = await Order.countDocuments();
+    const [
+      totalStudents,
+      totalOrders,
+      paidOrdersThisWeek,
+      paidStudentIds,
+      studentsToDeliveryIds,
+    ] = await Promise.all([
+      User.countDocuments(),
+      Order.countDocuments(),
+      Order.find({
+        paymentStatus: "Paid",
+        createdAt: { $gte: startOfWeek, $lte: endOfWeek },
+      }),
+      // Distinct students/users with at least one paid order (all-time)
+      Order.distinct("userId", paidFilter),
+      // Distinct students/users with at least one paid, not-yet-delivered order
+      Order.distinct("userId", toDeliveryFilter),
+    ]);
 
     // -----------------------
     // WEEKLY REVENUE
     // (ONLY PAID ORDERS)
     // -----------------------
-    const paidOrders = await Order.find({
-      paymentStatus: "Paid",
-      createdAt: { $gte: startOfWeek, $lte: endOfWeek },
-    });
-
-    const weeklyRevenue = paidOrders.reduce(
+    const weeklyRevenue = paidOrdersThisWeek.reduce(
       (sum, order) => sum + (order.total || 0),
       0
     );
+
+    const paidStudents = Array.isArray(paidStudentIds)
+      ? paidStudentIds.length
+      : 0;
+    const studentsToDelivery = Array.isArray(studentsToDeliveryIds)
+      ? studentsToDeliveryIds.length
+      : 0;
 
     res.json({
       totalStudents,
       totalOrders,
       weeklyRevenue,
+      paidStudents,
+      studentsToDelivery,
     });
   } catch (err) {
     console.error("Dashboard stats error:", err);

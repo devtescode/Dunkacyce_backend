@@ -1,5 +1,6 @@
 const Order = require("../Models/models/order.model");
 const crypto = require("crypto");
+const jwt = require("jsonwebtoken");
 
 // GET USER PAID ORDERS
 const mongoose = require("mongoose");
@@ -122,6 +123,69 @@ exports.getUserReceipts = async (req, res) => {
     });
   } catch (err) {
     console.error("RECEIPT ERROR:", err);
+    return res.status(500).json({
+      success: false,
+      message: err.message,
+    });
+  }
+};
+
+module.exports.updateOrderStatus = async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({
+        success: false,
+        message: "Missing or invalid authorization token",
+      });
+    }
+
+    const token = authHeader.split(" ")[1];
+    try {
+      jwt.verify(token, process.env.ADMIN_JWT_SECRET);
+    } catch (err) {
+      return res.status(403).json({
+        success: false,
+        message: "Invalid or expired admin token",
+      });
+    }
+
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid order ID",
+      });
+    }
+
+    const { status } = req.body || {};
+    const allowedStatuses = ["Pending", "Preparing", "Ready", "Delivered"];
+    if (!allowedStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid status. Allowed values: ${allowedStatuses.join(", ")}`,
+      });
+    }
+
+    const order = await Order.findByIdAndUpdate(
+      id,
+      { status },
+      { new: true, runValidators: true }
+    );
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      order,
+    });
+  } catch (err) {
+    console.error("UPDATE ORDER STATUS ERROR:", err);
     return res.status(500).json({
       success: false,
       message: err.message,

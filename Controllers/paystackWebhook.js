@@ -127,6 +127,66 @@ router.post("/webhook", async (req, res) => {
             });
 
             console.log("🛒 Cart cleared after payment");
+
+            // =========================
+            // 🔔 REAL-TIME ADMIN ALERT
+            // =========================
+            const io = req.app.get("io");
+            if (io) {
+                let student = null;
+                try {
+                    const populatedOrder = await Order.findById(order._id).populate("userId", "fullName email phone");
+                    const u = populatedOrder?.userId;
+                    if (u && typeof u === "object") {
+                        student = {
+                            _id: u._id,
+                            fullName: u.fullName || null,
+                            email: u.email || null,
+                            phone: u.phone || null,
+                        };
+                    }
+                } catch (populateErr) {
+                    console.warn("⚠️ Could not populate student for payment alert:", populateErr.message);
+                }
+
+                if (!student) {
+                    try {
+                        const u = await User.findById(order.userId).select("fullName email phone");
+                        if (u) {
+                            student = {
+                                _id: u._id,
+                                fullName: u.fullName || null,
+                                email: u.email || null,
+                                phone: u.phone || null,
+                            };
+                        }
+                    } catch (userErr) {
+                        console.warn("⚠️ Could not load student for payment alert:", userErr.message);
+                    }
+                }
+
+                const payload = {
+                    orderId: order._id,
+                    reference: order.reference,
+                    amountPaid: order.amountPaid,
+                    total: order.total,
+                    paidAt: order.paidAt,
+                    paymentChannel: order.paymentChannel,
+                    paymentStatus: order.paymentStatus,
+                    status: order.status,
+                    fulfillmentStatus: order.status,
+                    hostel: order.hostel,
+                    room: order.room,
+                    userId: order.userId,
+                    student,
+                    items: order.items,
+                    itemCount: Array.isArray(order.items) ? order.items.length : 0,
+                    createdAt: order.createdAt,
+                };
+
+                io.to("admins").emit("payment_confirmed", payload);
+                console.log("🔔 Admin payment alert emitted:", order.reference);
+            }
         } else {
             console.log("⚠️ Order not found for reference:", reference);
         }

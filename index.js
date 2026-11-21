@@ -5,6 +5,7 @@ require("dotenv").config();
 const cors = require("cors");
 
 const { Server } = require("socket.io");
+const jwt = require("jsonwebtoken");
 
 // routes
 const userRoutes = require("./Routes/user.routes");
@@ -35,6 +36,51 @@ const io = new Server(server, {
 });
 
 app.set("io", io);
+
+io.use((socket, next) => {
+  try {
+    const authToken = socket.handshake.auth?.token;
+    const header = socket.handshake.headers?.authorization;
+    let token = authToken;
+
+    if (!token && typeof header === "string" && header.startsWith("Bearer ")) {
+      token = header.split(" ")[1];
+    }
+
+    if (!token) {
+      return next();
+    }
+
+    // Try admin auth first
+    try {
+      const decoded = jwt.verify(token, process.env.ADMIN_JWT_SECRET);
+      socket.data.user = decoded;
+      socket.data.role = "admin";
+      socket.join("admins");
+      return next();
+    } catch (_) {
+      // Not a valid admin token; try user token below.
+    }
+
+    // Optional user auth: join user room, but never block connection.
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      socket.data.user = decoded;
+      socket.data.role = decoded.role || "user";
+      if (decoded?.id) {
+        socket.join(`user:${decoded.id}`);
+      }
+      return next();
+    } catch (_) {
+      // Invalid/unknown token; allow connection for existing realtime clients.
+    }
+
+    return next();
+  } catch (err) {
+    console.error("Socket auth middleware error:", err.message);
+    return next();
+  }
+});
 
 io.on("connection", (socket) => {
   console.log("🟢 User connected:", socket.id);

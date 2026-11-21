@@ -2,6 +2,7 @@ const jwt = require("jsonwebtoken")
 const env = require("dotenv")
 const mongoose = require("mongoose")
 const bcrypt = require("bcryptjs")
+const cloudinary = require("../config/cloudinary");
 const User = require("../Models/user.models");
 env.config()
 
@@ -63,9 +64,9 @@ module.exports.signup = async (req, res) => {
                 email: user.email,
                 phone: user.phone,
                 gender: user.gender,
+                profilePicture: user.profilePicture || "",
             },
         });
-        console.log("Account created successfully", user    )
     } catch (err) {
         console.error(err);
         return res.status(500).json({
@@ -193,5 +194,85 @@ module.exports.changePasswordPage = async (req, res) => {
       success: false,
       message: "Server error",
     });
+  }
+};
+
+module.exports.getProfile = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const user = await User.findById(userId).select("-password");
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    return res.status(200).json({ user });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: "Server error" });
+  }
+};
+
+module.exports.updateProfile = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const { fullName, email, phone, gender } = req.body;
+
+    if (email && email !== user.email) {
+      const existingUser = await User.findOne({ email });
+      if (existingUser && existingUser._id.toString() !== userId.toString()) {
+        return res.status(400).json({ message: "Email already in use" });
+      }
+      user.email = email;
+    }
+
+    if (fullName !== undefined) user.fullName = fullName;
+    if (phone !== undefined) user.phone = phone;
+
+    if (gender !== undefined) {
+      const allowedGenders = ["Male", "Female"];
+      if (!allowedGenders.includes(gender)) {
+        return res.status(400).json({
+          message: "Please select a valid gender (Male or Female)",
+        });
+      }
+      user.gender = gender;
+    }
+
+    if (req.file) {
+      const fileString = `data:${req.file.mimetype};base64,${req.file.buffer.toString(
+        "base64"
+      )}`;
+
+      const uploadResult = await cloudinary.uploader.upload(fileString, {
+        folder: "profiles",
+      });
+
+      user.profilePicture = uploadResult.secure_url;
+    }
+
+    await user.save();
+
+    const updatedUser = user.toJSON();
+
+    return res.status(200).json({
+      message: "Profile updated successfully",
+      user: updatedUser,
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: "Server error" });
   }
 };
